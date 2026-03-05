@@ -1,0 +1,187 @@
+{
+  "projectType": "api-service",
+  "projectName": "Wolfix.Server",
+  "projectDescription": "Enterprise-grade modular monolith e-commerce backend built with .NET 9, Clean Architecture, and Domain-Driven Design",
+  "theme": "aspen",
+  "primaryColor": "#6421e6",
+  "lightColor": "#b48cf4",
+  "darkColor": "#e2dae9",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/modular-monolith",
+              "concepts/clean-architecture",
+              "concepts/domain-driven-design",
+              "concepts/result-pattern"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/development",
+              "guides/deployment",
+              "guides/database-migrations",
+              "guides/aspire-orchestration"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/stripe-payments",
+              "integrations/azure-storage",
+              "integrations/google-oauth",
+              "integrations/toxicity-api"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Identity",
+            "pages": [
+              "api/identity/register",
+              "api/identity/login",
+              "api/identity/google-auth",
+              "api/identity/account-management"
+            ]
+          },
+          {
+            "group": "Catalog",
+            "pages": [
+              "api/catalog/products",
+              "api/catalog/categories",
+              "api/catalog/reviews",
+              "api/catalog/discounts"
+            ]
+          },
+          {
+            "group": "Order",
+            "pages": [
+              "api/order/create-order",
+              "api/order/manage-orders",
+              "api/order/delivery-methods",
+              "api/order/payments"
+            ]
+          },
+          {
+            "group": "Customer",
+            "pages": [
+              "api/customer/profile",
+              "api/customer/cart",
+              "api/customer/wishlist"
+            ]
+          },
+          {
+            "group": "Seller",
+            "pages": [
+              "api/seller/onboarding",
+              "api/seller/shop-management",
+              "api/seller/products"
+            ]
+          },
+          {
+            "group": "Media",
+            "pages": [
+              "api/media/upload",
+              "api/media/management"
+            ]
+          },
+          {
+            "group": "Support",
+            "pages": [
+              "api/support/tickets",
+              "api/support/disputes"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Modules",
+        "groups": [
+          {
+            "group": "Module Reference",
+            "pages": [
+              "modules/overview",
+              "modules/identity",
+              "modules/catalog",
+              "modules/order",
+              "modules/customer",
+              "modules/seller",
+              "modules/media",
+              "modules/support",
+              "modules/admin"
+            ]
+          },
+          {
+            "group": "Shared Components",
+            "pages": [
+              "modules/shared-domain",
+              "modules/shared-application",
+              "modules/shared-infrastructure"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Modular Monolith Architecture with clear bounded contexts",
+    "Clean Architecture with strict layer separation",
+    "Domain-Driven Design with Aggregates and Value Objects",
+    "JWT Authentication with Role-Based Access Control (RBAC)",
+    "Google OAuth integration",
+    "Stripe payment processing",
+    "Azure Blob Storage for media management",
+    "Content moderation with Toxicity API",
+    "PostgreSQL with separate schemas per module",
+    ".NET Aspire for cloud-native orchestration",
+    "Result Pattern for explicit error handling",
+    "Minimal API endpoints following REPR pattern",
+    "In-memory event bus for inter-module communication",
+    "Guid V7 for time-sortable identifiers"
+  ],
+  "publicApiSurface": [
+    "POST /api/account/customer/register - Register new customer",
+    "POST /api/account/roles - Login and get user roles",
+    "POST /api/account/token - Get JWT token by role",
+    "POST /api/account/customer/google - Continue with Google OAuth",
+    "POST /api/products - Create product (Seller)",
+    "GET /api/products/product/{productId} - Get product details",
+    "GET /api/products/category/{categoryId}/page/{page} - Get products by category",
+    "POST /api/products/product/{productId}/discount - Add discount to product",
+    "POST /api/products/{productId}/reviews - Add product review",
+    "GET /api/products/{productId}/reviews - Get product reviews",
+    "POST /api/orders - Create new order",
+    "GET /api/orders/{orderId} - Get order details",
+    "POST /api/orders/{orderId}/payment - Process payment",
+    "GET /api/cart - Get customer cart",
+    "POST /api/cart/items - Add item to cart",
+    "GET /api/wishlist - Get customer wishlist",
+    "POST /api/media/upload - Upload media file",
+    "POST /api/seller/application - Submit seller application",
+    "GET /api/seller/shop - Get seller shop details",
+    "POST /api/support/tickets - Create support ticket"
+  ]
+}
