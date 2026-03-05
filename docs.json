@@ -127,6 +127,12 @@
               "api/support/tickets",
               "api/support/disputes"
             ]
+          },
+          {
+            "group": "Admin",
+            "pages": [
+              "api/admin/management"
+            ]
           }
         ]
       },

@@ -1,0 +1,346 @@
+---
+title: Admin Management
+description: Manage administrator accounts (SuperAdmin only)
+---
+
+The Admin API allows SuperAdmins to create, list, and delete administrator accounts.
+
+<Warning>
+  All Admin endpoints require **SuperAdmin** authorization. Regular admins and other roles cannot access these endpoints.
+</Warning>
+
+## Get All Admins
+
+Retrieve a paginated list of all administrator accounts.
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.example.com/api/admins/page/1?pageSize=50" \
+  -H "Authorization: Bearer YOUR_SUPER_ADMIN_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch('https://api.example.com/api/admins/page/1?pageSize=50', {
+  method: 'GET',
+  headers: {
+    'Authorization': 'Bearer YOUR_SUPER_ADMIN_TOKEN'
+  }
+});
+
+const admins = await response.json();
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://api.example.com/api/admins/page/1',
+    params={'pageSize': 50},
+    headers={'Authorization': 'Bearer YOUR_SUPER_ADMIN_TOKEN'}
+)
+
+admins = response.json()
+```
+
+```csharp C#
+using var client = new HttpClient();
+client.DefaultRequestHeaders.Authorization = 
+    new AuthenticationHeaderValue("Bearer", "YOUR_SUPER_ADMIN_TOKEN");
+
+var response = await client.GetAsync("https://api.example.com/api/admins/page/1?pageSize=50");
+var admins = await response.Content.ReadFromJsonAsync<PaginationDto<BasicAdminDto>>();
+```
+</CodeGroup>
+
+### Request
+
+**Method:** `GET`  
+**Route:** `/api/admins/page/{page}`  
+**Auth:** SuperAdmin required
+
+<ParamField path="page" type="integer" required>
+  Page number (1-based)
+</ParamField>
+
+<ParamField query="pageSize" type="integer" default="50">
+  Number of admins per page
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  List of admin accounts
+  
+  <Expandable title="BasicAdminDto properties">
+    <ResponseField name="id" type="string">
+      Admin account ID (Guid)
+    </ResponseField>
+    
+    <ResponseField name="email" type="string">
+      Admin email address
+    </ResponseField>
+    
+    <ResponseField name="fullName" type="string">
+      Admin full name
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string">
+      Account creation timestamp
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="totalCount" type="integer">
+  Total number of admin accounts
+</ResponseField>
+
+<ResponseField name="page" type="integer">
+  Current page number
+</ResponseField>
+
+<ResponseField name="pageSize" type="integer">
+  Items per page
+</ResponseField>
+
+<ResponseField name="totalPages" type="integer">
+  Total number of pages
+</ResponseField>
+
+### Example Response
+
+```json 200 OK
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "email": "admin@example.com",
+      "fullName": "John Admin",
+      "createdAt": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "totalCount": 1,
+  "page": 1,
+  "pageSize": 50,
+  "totalPages": 1
+}
+```
+
+---
+
+## Create Admin
+
+Create a new administrator account.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.example.com/api/admins" \
+  -H "Authorization: Bearer YOUR_SUPER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "newadmin@example.com",
+    "password": "SecurePass123!",
+    "firstName": "Jane",
+    "lastName": "Admin"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://api.example.com/api/admins', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_SUPER_ADMIN_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    email: 'newadmin@example.com',
+    password: 'SecurePass123!',
+    firstName: 'Jane',
+    lastName: 'Admin'
+  })
+});
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://api.example.com/api/admins',
+    headers={
+        'Authorization': 'Bearer YOUR_SUPER_ADMIN_TOKEN',
+        'Content-Type': 'application/json'
+    },
+    json={
+        'email': 'newadmin@example.com',
+        'password': 'SecurePass123!',
+        'firstName': 'Jane',
+        'lastName': 'Admin'
+    }
+)
+```
+
+```csharp C#
+using var client = new HttpClient();
+client.DefaultRequestHeaders.Authorization = 
+    new AuthenticationHeaderValue("Bearer", "YOUR_SUPER_ADMIN_TOKEN");
+
+var request = new CreateAdminDto
+{
+    Email = "newadmin@example.com",
+    Password = "SecurePass123!",
+    FirstName = "Jane",
+    LastName = "Admin"
+};
+
+var response = await client.PostAsJsonAsync("https://api.example.com/api/admins", request);
+```
+</CodeGroup>
+
+### Request
+
+**Method:** `POST`  
+**Route:** `/api/admins`  
+**Auth:** SuperAdmin required
+
+<ParamField body="email" type="string" required>
+  Admin email address (must be unique)
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Admin password (minimum 8 characters, must contain uppercase, lowercase, digit, and special character)
+</ParamField>
+
+<ParamField body="firstName" type="string" required>
+  Admin first name
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  Admin last name
+</ParamField>
+
+### Response
+
+```json 204 No Content
+```
+
+### Error Responses
+
+```json 400 Bad Request
+{
+  "detail": "Email already exists"
+}
+```
+
+```json 400 Bad Request
+{
+  "detail": "Password does not meet security requirements"
+}
+```
+
+---
+
+## Delete Admin
+
+Delete an administrator account.
+
+<Warning>
+  This action is permanent and cannot be undone. Ensure you want to delete the admin before proceeding.
+</Warning>
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE "https://api.example.com/api/admins/550e8400-e29b-41d4-a716-446655440000" \
+  -H "Authorization: Bearer YOUR_SUPER_ADMIN_TOKEN"
+```
+
+```javascript JavaScript
+const adminId = '550e8400-e29b-41d4-a716-446655440000';
+
+const response = await fetch(`https://api.example.com/api/admins/${adminId}`, {
+  method: 'DELETE',
+  headers: {
+    'Authorization': 'Bearer YOUR_SUPER_ADMIN_TOKEN'
+  }
+});
+```
+
+```python Python
+import requests
+
+admin_id = '550e8400-e29b-41d4-a716-446655440000'
+
+response = requests.delete(
+    f'https://api.example.com/api/admins/{admin_id}',
+    headers={'Authorization': 'Bearer YOUR_SUPER_ADMIN_TOKEN'}
+)
+```
+
+```csharp C#
+using var client = new HttpClient();
+client.DefaultRequestHeaders.Authorization = 
+    new AuthenticationHeaderValue("Bearer", "YOUR_SUPER_ADMIN_TOKEN");
+
+var adminId = Guid.Parse("550e8400-e29b-41d4-a716-446655440000");
+var response = await client.DeleteAsync($"https://api.example.com/api/admins/{adminId}");
+```
+</CodeGroup>
+
+### Request
+
+**Method:** `DELETE`  
+**Route:** `/api/admins/{adminId}`  
+**Auth:** SuperAdmin required
+
+<ParamField path="adminId" type="string" required>
+  Admin account ID (Guid) to delete
+</ParamField>
+
+### Response
+
+```json 204 No Content
+```
+
+### Error Responses
+
+```json 404 Not Found
+{
+  "detail": "Admin not found"
+}
+```
+
+```json 400 Bad Request
+{
+  "detail": "Cannot delete your own admin account"
+}
+```
+
+```json 500 Internal Server Error
+{
+  "detail": "Failed to delete admin account"
+}
+```
+
+---
+
+## Authorization
+
+All Admin endpoints require the **SuperAdmin** role:
+
+```http
+Authorization: Bearer YOUR_SUPER_ADMIN_TOKEN
+```
+
+<Info>
+  To obtain a SuperAdmin token, log in with a SuperAdmin account using the [Login](/api/identity/login) endpoint and select the SuperAdmin role.
+</Info>
+
+## Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Identity Module" icon="shield-halved" href="/modules/identity">
+    Learn about the Identity module and role management
+  </Card>
+  
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Understand JWT authentication and role-based access
+  </Card>
+</CardGroup>
