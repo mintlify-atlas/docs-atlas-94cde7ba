@@ -1,0 +1,379 @@
+---
+title: 'Shop Management'
+description: 'Manage seller profile and shop settings'
+---
+
+## Get Seller Profile (Seller)
+
+<api method="GET" path="/api/sellers/{sellerId}" auth="Seller" />
+
+Retrieves complete profile information for a seller.
+
+### Path Parameters
+
+<ParamField path="sellerId" type="string (uuid)" required>
+  Seller identifier (must match authenticated seller)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string (uuid)">
+  Seller identifier
+</ResponseField>
+
+<ResponseField name="shopName" type="string">
+  Shop name
+</ResponseField>
+
+<ResponseField name="shopDescription" type="string">
+  Shop description
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Seller email address
+</ResponseField>
+
+<ResponseField name="firstName" type="string">
+  Seller first name
+</ResponseField>
+
+<ResponseField name="lastName" type="string">
+  Seller last name
+</ResponseField>
+
+<ResponseField name="phoneNumber" type="string">
+  Seller contact phone
+</ResponseField>
+
+<ResponseField name="address" type="object">
+  Business address
+</ResponseField>
+
+<ResponseField name="averageRating" type="number">
+  Average seller rating
+</ResponseField>
+
+<ResponseField name="totalSales" type="integer">
+  Total number of sales
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Profile retrieved
+- `404 Not Found` - Seller not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/sellers/seller-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+{
+  "id": "seller-uuid",
+  "shopName": "AudioPro Electronics",
+  "shopDescription": "Premium audio equipment and accessories",
+  "email": "seller@example.com",
+  "firstName": "John",
+  "lastName": "Smith",
+  "phoneNumber": "+1-555-123-4567",
+  "address": {
+    "street": "123 Business Ave",
+    "city": "New York",
+    "state": "NY",
+    "zipCode": "10001",
+    "country": "USA"
+  },
+  "averageRating": 4.8,
+  "totalSales": 1247,
+  "createdAt": "2024-01-01T10:00:00Z"
+}
+```
+
+---
+
+## Get Seller Categories (Seller)
+
+<api method="GET" path="/api/sellers/{sellerId}/categories" auth="Seller" />
+
+Retrieves all product categories used by the seller's products.
+
+### Path Parameters
+
+<ParamField path="sellerId" type="string (uuid)" required>
+  Seller identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="categories" type="array">
+  Array of category objects with product counts
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Categories retrieved
+- `404 Not Found` - Seller not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/sellers/seller-uuid/categories" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+[
+  {
+    "categoryId": "category-uuid-1",
+    "categoryName": "Headphones",
+    "parentCategoryName": "Audio",
+    "productCount": 45
+  },
+  {
+    "categoryId": "category-uuid-2",
+    "categoryName": "Speakers",
+    "parentCategoryName": "Audio",
+    "productCount": 23
+  }
+]
+```
+
+---
+
+## Update Full Name (Seller)
+
+<api method="PATCH" path="/api/sellers/{sellerId}/full-name" auth="Seller" />
+
+Updates seller's first and last name.
+
+### Path Parameters
+
+<ParamField path="sellerId" type="string (uuid)" required>
+  Seller identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="firstName" type="string" required>
+  New first name
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  New last name
+</ParamField>
+
+### Response Codes
+
+- `200 OK` - Name updated
+- `400 Bad Request` - Invalid name
+- `404 Not Found` - Seller not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/sellers/seller-uuid/full-name" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "firstName": "Jane",
+    "lastName": "Doe"
+  }'
+```
+
+---
+
+## Update Phone Number (Seller)
+
+<api method="PATCH" path="/api/sellers/{sellerId}/phone-number" auth="Seller" />
+
+Updates seller's contact phone number.
+
+### Request Body
+
+<ParamField body="phoneNumber" type="string" required>
+  New phone number
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/sellers/seller-uuid/phone-number" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"phoneNumber": "+1-555-987-6543"}'
+```
+
+---
+
+## Update Address (Seller)
+
+<api method="PATCH" path="/api/sellers/{sellerId}/address" auth="Seller" />
+
+Updates seller's business address.
+
+### Request Body
+
+<ParamField body="street" type="string" required>
+  Street address
+</ParamField>
+
+<ParamField body="city" type="string" required>
+  City
+</ParamField>
+
+<ParamField body="state" type="string" required>
+  State/Province
+</ParamField>
+
+<ParamField body="zipCode" type="string" required>
+  ZIP/Postal code
+</ParamField>
+
+<ParamField body="country" type="string" required>
+  Country
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/sellers/seller-uuid/address" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "street": "456 Commerce Blvd",
+    "city": "San Francisco",
+    "state": "CA",
+    "zipCode": "94102",
+    "country": "USA"
+  }'
+```
+
+---
+
+## Update Birth Date (Seller)
+
+<api method="PATCH" path="/api/sellers/{sellerId}/birth-date" auth="Seller" />
+
+Updates seller's date of birth.
+
+### Request Body
+
+<ParamField body="birthDate" type="string (date)" required>
+  Date of birth (format: YYYY-MM-DD)
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/sellers/seller-uuid/birth-date" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"birthDate": "1980-03-25"}'
+```
+
+---
+
+## Get All Sellers (SuperAdmin)
+
+<api method="GET" path="/api/sellers/page/{page}" auth="SuperAdmin" />
+
+Retrieves paginated list of all sellers (admin use only).
+
+### Path Parameters
+
+<ParamField path="page" type="integer" required>
+  Page number (starts at 1)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="50">
+  Items per page
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/sellers/page/1?pageSize=50" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+---
+
+## Delete Seller (SuperAdmin)
+
+<api method="DELETE" path="/api/sellers/{sellerId}" auth="SuperAdmin" />
+
+Deletes a seller account and associated data.
+
+### Path Parameters
+
+<ParamField path="sellerId" type="string (uuid)" required>
+  Seller identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Seller deleted
+- `400 Bad Request` - Seller has active orders or other dependencies
+- `404 Not Found` - Seller not found
+- `500 Internal Server Error` - Error during deletion
+
+### Example
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/sellers/seller-uuid" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+<Warning>
+  Deleting a seller may affect active orders and product listings. Ensure proper cleanup before deletion.
+</Warning>
+
+---
+
+## Shop Management Best Practices
+
+### Profile Completeness
+
+<Info>
+  Complete all profile information to build trust with customers. Include:
+  - Professional shop name
+  - Detailed description
+  - Valid contact information
+  - Accurate business address
+</Info>
+
+### Shop Performance Metrics
+
+Monitor key metrics:
+- **Average Rating**: Customer satisfaction rating
+- **Total Sales**: Number of completed orders
+- **Response Time**: How quickly you respond to inquiries
+- **Fulfillment Rate**: Percentage of orders successfully fulfilled
+
+### Maintaining Good Standing
+
+<Steps>
+  <Step title="Update Information">
+    Keep contact and address information current
+  </Step>
+  <Step title="Respond Quickly">
+    Answer customer inquiries promptly
+  </Step>
+  <Step title="Fulfill Orders">
+    Process and ship orders within promised timeframes
+  </Step>
+  <Step title="Maintain Quality">
+    Ensure product quality matches descriptions
+  </Step>
+  <Step title="Handle Issues">
+    Address customer complaints professionally
+  </Step>
+</Steps>

@@ -1,0 +1,629 @@
+---
+title: Database Migrations
+description: Managing Entity Framework Core migrations across modules
+---
+
+Wolfix.Server uses Entity Framework Core for database management, with each module maintaining its own migrations. This guide covers creating, applying, and managing migrations in a modular monolith.
+
+## Understanding Module-Specific Migrations
+
+Each module has its own `DbContext` and migration history:
+
+```
+Admin.Infrastructure/Migrations/
+Catalog.Infrastructure/Migrations/
+Customer.Infrastructure/Migrations/
+Identity.Infrastructure/Migrations/
+Media.Infrastructure/Migrations/
+Order.Infrastructure/Migrations/
+Seller.Infrastructure/Migrations/
+```
+
+<Info>
+  Multiple `DbContext` instances can share the same physical database while maintaining independent migration histories.
+</Info>
+
+## Creating Migrations
+
+### Create Migration for a Module
+
+When you modify entities in a module, create a migration:
+
+```bash
+# From solution root
+dotnet ef migrations add <MigrationName> \
+  --project <Module>.Infrastructure \
+  --startup-project Wolfix.API \
+  --context <Module>DbContext
+```
+
+### Example: Add ProductRating to Catalog
+
+<Steps>
+  <Step title="Modify the Entity">
+    ```csharp Catalog.Domain/ProductAggregate/Product.cs
+    public sealed class Product : BaseEntity
+    {
+        // Existing properties...
+        
+        // New property
+        public int ReviewCount { get; private set; }
+    }
+    ```
+  </Step>
+
+  <Step title="Create Migration">
+    ```bash
+    dotnet ef migrations add AddReviewCountToProduct \
+      --project Catalog.Infrastructure \
+      --startup-project Wolfix.API \
+      --context CatalogDbContext
+    ```
+    
+    This generates:
+    ```
+    Catalog.Infrastructure/Migrations/
+      20260305120000_AddReviewCountToProduct.cs
+      20260305120000_AddReviewCountToProduct.Designer.cs
+      CatalogDbContextModelSnapshot.cs
+    ```
+  </Step>
+
+  <Step title="Review Generated Migration">
+    ```csharp Catalog.Infrastructure/Migrations/20260305120000_AddReviewCountToProduct.cs
+    public partial class AddReviewCountToProduct : Migration
+    {
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.AddColumn<int>(
+                name: "ReviewCount",
+                schema: "catalog",
+                table: "catalog_products",
+                type: "integer",
+                nullable: false,
+                defaultValue: 0);
+        }
+
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropColumn(
+                name: "ReviewCount",
+                schema: "catalog",
+                table: "catalog_products");
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Apply Migration">
+    ```bash
+    dotnet ef database update \
+      --project Catalog.Infrastructure \
+      --startup-project Wolfix.API \
+      --context CatalogDbContext
+    ```
+  </Step>
+</Steps>
+
+## Initial Migrations
+
+Each module has an initial migration that creates its schema:
+
+```csharp Admin.Infrastructure/Migrations/20250920141248_Initial.cs
+public partial class Initial : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.EnsureSchema(
+            name: "admin");
+
+        migrationBuilder.CreateTable(
+            name: "Admins",
+            schema: "admin",
+            columns: table => new
+            {
+                Id = table.Column<Guid>(type: "uuid", nullable: false),
+                AccountId = table.Column<Guid>(type: "uuid", nullable: false),
+                FirstName = table.Column<string>(type: "text", nullable: false),
+                LastName = table.Column<string>(type: "text", nullable: false),
+                MiddleName = table.Column<string>(type: "text", nullable: false),
+                PhoneNumber = table.Column<string>(type: "text", nullable: false)
+            },
+            constraints: table =>
+            {
+                table.PrimaryKey("PK_Admins", x => x.Id);
+            });
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(
+            name: "Admins",
+            schema: "admin");
+    }
+}
+```
+
+<Note>
+  Each module uses a schema prefix (e.g., `admin`, `catalog`) to avoid table name conflicts.
+</Note>
+
+## Applying Migrations
+
+### Development Environment
+
+Apply all module migrations:
+
+```bash
+#!/bin/bash
+# apply-migrations.sh
+
+MODULES=("Admin" "Catalog" "Customer" "Identity" "Media" "Order" "Seller")
+
+for MODULE in "${MODULES[@]}"; do
+  echo "Applying migrations for $MODULE..."
+  dotnet ef database update \
+    --project "$MODULE.Infrastructure" \
+    --startup-project Wolfix.API \
+    --context "${MODULE}DbContext"
+done
+
+echo "All migrations applied successfully!"
+```
+
+```bash
+chmod +x apply-migrations.sh
+./apply-migrations.sh
+```
+
+### Production Environment
+
+<Warning>
+  Never apply migrations directly in production during application startup. Use a separate deployment step.
+</Warning>
+
+**Option 1: Manual Application**
+
+```bash
+# Connect to production container
+docker exec -it <api-container> /bin/bash
+
+# Apply migrations
+dotnet ef database update \
+  --project Admin.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+**Option 2: Migration Scripts**
+
+Generate SQL scripts for DBA review:
+
+```bash
+# Generate SQL script
+dotnet ef migrations script \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API \
+  --output catalog-migration.sql \
+  --idempotent
+```
+
+The `--idempotent` flag makes the script safe to run multiple times.
+
+**Option 3: CI/CD Pipeline**
+
+```yaml
+# GitHub Actions example
+- name: Apply Database Migrations
+  run: |
+    dotnet tool install --global dotnet-ef
+    
+    MODULES=("Admin" "Catalog" "Customer" "Identity" "Media" "Order" "Seller")
+    
+    for MODULE in "${MODULES[@]}"; do
+      dotnet ef database update \
+        --project "$MODULE.Infrastructure" \
+        --startup-project Wolfix.API \
+        --context "${MODULE}DbContext" \
+        --connection "${{ secrets.DB_CONNECTION_STRING }}"
+    done
+```
+
+## Migration Patterns
+
+### Adding a Column
+
+```csharp
+public partial class AddEmailVerifiedColumn : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.AddColumn<bool>(
+            name: "EmailVerified",
+            schema: "identity",
+            table: "AspNetUsers",
+            type: "boolean",
+            nullable: false,
+            defaultValue: false); // Provide default for existing rows
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(
+            name: "EmailVerified",
+            schema: "identity",
+            table: "AspNetUsers");
+    }
+}
+```
+
+### Renaming a Column
+
+```csharp
+public partial class RenameProductTitleColumn : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.RenameColumn(
+            name: "Title",
+            schema: "catalog",
+            table: "catalog_products",
+            newName: "Name");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.RenameColumn(
+            name: "Name",
+            schema: "catalog",
+            table: "catalog_products",
+            newName: "Title");
+    }
+}
+```
+
+### Adding an Index
+
+```csharp
+public partial class AddIndexOnProductTitle : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.CreateIndex(
+            name: "IX_Products_Title",
+            schema: "catalog",
+            table: "catalog_products",
+            column: "Title");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropIndex(
+            name: "IX_Products_Title",
+            schema: "catalog",
+            table: "catalog_products");
+    }
+}
+```
+
+### Data Migration
+
+For complex data transformations:
+
+```csharp
+public partial class MigrateProductPrices : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        // Add new column
+        migrationBuilder.AddColumn<decimal>(
+            name: "FinalPrice",
+            schema: "catalog",
+            table: "catalog_products",
+            type: "decimal(18,2)",
+            nullable: false,
+            defaultValue: 0m);
+        
+        // Migrate data using raw SQL
+        migrationBuilder.Sql(@"
+            UPDATE catalog.catalog_products
+            SET FinalPrice = CASE
+                WHEN Discount IS NOT NULL THEN Price * (100 - DiscountPercent) / 100
+                ELSE Price
+            END
+        ");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(
+            name: "FinalPrice",
+            schema: "catalog",
+            table: "catalog_products");
+    }
+}
+```
+
+## Managing Migrations
+
+### List Migrations
+
+```bash
+dotnet ef migrations list \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+Output:
+```
+20250920141248_Initial (Applied)
+20250921104723_AddReviewCount (Applied)
+20260305120000_AddFinalPrice (Pending)
+```
+
+### Remove Last Migration
+
+```bash
+# Only if NOT applied to database
+dotnet ef migrations remove \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+<Warning>
+  Cannot remove a migration that has been applied to the database. Create a new migration to revert changes instead.
+</Warning>
+
+### Revert to Specific Migration
+
+```bash
+# Revert to specific migration
+dotnet ef database update <MigrationName> \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+
+# Example: Revert to Initial
+dotnet ef database update Initial \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+### Drop All Migrations
+
+```bash
+# Drop database
+dotnet ef database drop \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API \
+  --force
+
+# Recreate with all migrations
+dotnet ef database update \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+## Multi-Module Coordination
+
+### Cross-Module Dependencies
+
+When one module references another's data:
+
+```csharp Order.Domain/OrderAggregate/Order.cs
+public sealed class Order : BaseEntity
+{
+    // Reference by ID, not entity
+    public Guid CustomerId { get; private set; }
+    public Guid ProductId { get; private set; }
+    
+    // No navigation properties to other modules
+}
+```
+
+<Info>
+  Modules reference each other by ID only, never by navigation properties. This maintains module independence.
+</Info>
+
+### Coordinated Schema Changes
+
+If you need to change a shared concept across modules:
+
+<Steps>
+  <Step title="Create Migrations in Each Module">
+    ```bash
+    dotnet ef migrations add ChangeCustomerIdFormat \
+      --project Customer.Infrastructure \
+      --startup-project Wolfix.API
+    
+    dotnet ef migrations add ChangeCustomerIdFormat \
+      --project Order.Infrastructure \
+      --startup-project Wolfix.API
+    ```
+  </Step>
+
+  <Step title="Apply in Correct Order">
+    ```bash
+    # Apply to source module first
+    dotnet ef database update \
+      --project Customer.Infrastructure \
+      --startup-project Wolfix.API
+    
+    # Then apply to dependent modules
+    dotnet ef database update \
+      --project Order.Infrastructure \
+      --startup-project Wolfix.API
+    ```
+  </Step>
+
+  <Step title="Test Thoroughly">
+    Run integration tests to ensure modules still communicate correctly.
+  </Step>
+</Steps>
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Review Generated Migrations">
+    EF Core doesn't always generate optimal SQL. Review and customize:
+    
+    ```csharp
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        // EF Core generated this
+        migrationBuilder.DropColumn(name: "OldColumn");
+        migrationBuilder.AddColumn<string>(name: "NewColumn");
+        
+        // Better: Rename instead of drop/add to preserve data
+        migrationBuilder.RenameColumn(
+            name: "OldColumn",
+            newName: "NewColumn");
+    }
+    ```
+  </Step>
+
+  <Step title="Use Descriptive Migration Names">
+    ```bash
+    # ✅ Good
+    dotnet ef migrations add AddEmailVerificationToUsers
+    dotnet ef migrations add CreateProductReviewsTable
+    
+    # ❌ Bad
+    dotnet ef migrations add Update
+    dotnet ef migrations add Changes
+    ```
+  </Step>
+
+  <Step title="Always Provide Default Values">
+    When adding non-nullable columns:
+    
+    ```csharp
+    migrationBuilder.AddColumn<bool>(
+        name: "IsActive",
+        type: "boolean",
+        nullable: false,
+        defaultValue: true); // Always provide default
+    ```
+  </Step>
+
+  <Step title="Test Down Migrations">
+    Ensure rollback works:
+    
+    ```bash
+    # Apply migration
+    dotnet ef database update
+    
+    # Test rollback
+    dotnet ef database update <PreviousMigration>
+    
+    # Re-apply
+    dotnet ef database update
+    ```
+  </Step>
+
+  <Step title="Keep Migrations Small">
+    Create separate migrations for distinct changes:
+    
+    ```bash
+    # Instead of one large migration
+    dotnet ef migrations add AddMultipleProductFields
+    
+    # Create multiple focused migrations
+    dotnet ef migrations add AddProductRating
+    dotnet ef migrations add AddProductTags
+    dotnet ef migrations add AddProductInventory
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Migration Already Applied
+
+**Problem:** "The migration 'X' has already been applied to the database."
+
+**Solution:**
+```bash
+# Remove from migrations table
+dotnet ef migrations remove \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+
+# Or update to skip that migration
+dotnet ef database update <NextMigration>
+```
+
+### Pending Model Changes
+
+**Problem:** "Your target project doesn't match your migrations assembly."
+
+**Solution:**
+```bash
+# Create migration for pending changes
+dotnet ef migrations add PendingChanges \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+### Connection String Not Found
+
+**Problem:** "A connection string was not found in configuration."
+
+**Solution:**
+```bash
+# Specify connection string explicitly
+dotnet ef database update \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API \
+  --connection "Host=localhost;Database=wolfix;Username=postgres;Password=pass"
+```
+
+### Multiple DbContexts
+
+**Problem:** "More than one DbContext was found."
+
+**Solution:**
+```bash
+# Always specify the context
+dotnet ef migrations add MyMigration \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API \
+  --context CatalogDbContext
+```
+
+## MongoDB (Support Module)
+
+The Support module uses MongoDB, which doesn't require migrations:
+
+```csharp Support.Infrastructure.MongoDB/Extensions/MongoDbExtensions.cs
+public static async Task AddSupportMongoDbIndexes(this IServiceProvider services)
+{
+    var database = services.GetRequiredService<IMongoDatabase>();
+    var collection = database.GetCollection<SupportRequest>("SupportRequests");
+    
+    // Create indexes
+    await collection.Indexes.CreateOneAsync(
+        new CreateIndexModel<SupportRequest>(
+            Builders<SupportRequest>.IndexKeys.Ascending(x => x.CustomerId)
+        )
+    );
+    
+    await collection.Indexes.CreateOneAsync(
+        new CreateIndexModel<SupportRequest>(
+            Builders<SupportRequest>.IndexKeys.Ascending(x => x.Status)
+        )
+    );
+}
+```
+
+Indexes are created automatically on application startup.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy with migrations in CI/CD
+  </Card>
+  
+  <Card title="Aspire Orchestration" icon="cubes" href="/guides/aspire-orchestration">
+    Manage migrations with .NET Aspire
+  </Card>
+</CardGroup>

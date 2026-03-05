@@ -1,0 +1,345 @@
+---
+title: 'Discounts'
+description: 'Manage product discounts and promotions'
+---
+
+## Add Product Discount (Seller)
+
+<api method="POST" path="/api/products/product/{productId}/discount" auth="Seller" />
+
+Adds or updates a discount on a product.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="discountPercentage" type="number" required>
+  Discount percentage (1-99)
+</ParamField>
+
+<ParamField body="startDate" type="string (datetime)">
+  When the discount starts (optional, defaults to now)
+</ParamField>
+
+<ParamField body="endDate" type="string (datetime)">
+  When the discount ends (optional, null for indefinite)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Discount added successfully
+- `400 Bad Request` - Invalid discount percentage or dates
+- `404 Not Found` - Product not found or seller doesn't own the product
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/products/product/3fa85f64-5717-4562-b3fc-2c963f66afa6/discount" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "discountPercentage": 25,
+    "startDate": "2024-01-20T00:00:00Z",
+    "endDate": "2024-01-31T23:59:59Z"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/products/product/${productId}/discount`,
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      discountPercentage: 25,
+      startDate: '2024-01-20T00:00:00Z',
+      endDate: '2024-01-31T23:59:59Z'
+    })
+  }
+);
+
+if (response.status === 204) {
+  console.log('Discount added successfully');
+}
+```
+
+```python Python
+import requests
+from datetime import datetime
+
+response = requests.post(
+    f'https://your-server.com/api/products/product/{product_id}/discount',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    json={
+        'discountPercentage': 25,
+        'startDate': '2024-01-20T00:00:00Z',
+        'endDate': '2024-01-31T23:59:59Z'
+    }
+)
+
+if response.status_code == 204:
+    print('Discount added successfully')
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("Authorization", $"Bearer {jwtToken}");
+
+var discount = new {
+    DiscountPercentage = 25,
+    StartDate = "2024-01-20T00:00:00Z",
+    EndDate = "2024-01-31T23:59:59Z"
+};
+
+var response = await client.PostAsJsonAsync(
+    $"https://your-server.com/api/products/product/{productId}/discount",
+    discount
+);
+
+if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+{
+    Console.WriteLine("Discount added successfully");
+}
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**Invalid Percentage (400 Bad Request):**
+```json
+"Discount percentage must be between 1 and 99"
+```
+
+**Invalid Dates (400 Bad Request):**
+```json
+"End date must be after start date"
+```
+
+**Product Not Found (404 Not Found):**
+```json
+"Product not found or you don't have permission to modify it"
+```
+
+---
+
+## Remove Product Discount (Seller)
+
+<api method="DELETE" path="/api/products/product/{productId}/discount" auth="Seller" />
+
+Removes the active discount from a product, returning it to regular price.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Discount removed successfully
+- `400 Bad Request` - Product has no active discount
+- `404 Not Found` - Product not found or seller doesn't own the product
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/products/product/3fa85f64-5717-4562-b3fc-2c963f66afa6/discount" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/products/product/${productId}/discount`,
+  {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+if (response.status === 204) {
+  console.log('Discount removed successfully');
+}
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    f'https://your-server.com/api/products/product/{product_id}/discount',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+if response.status_code == 204:
+    print('Discount removed successfully')
+```
+
+```csharp C#
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("Authorization", $"Bearer {jwtToken}");
+
+var response = await client.DeleteAsync(
+    $"https://your-server.com/api/products/product/{productId}/discount"
+);
+
+if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+{
+    Console.WriteLine("Discount removed successfully");
+}
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**No Active Discount (400 Bad Request):**
+```json
+"This product does not have an active discount"
+```
+
+**Not Authorized (404 Not Found):**
+```json
+"Product not found or you don't have permission to modify it"
+```
+
+---
+
+## View Discounted Products
+
+<api method="GET" path="/api/products/with-discount/page/{page}" auth="none" />
+
+Retrieves all products currently on discount. This endpoint is documented in detail in the [Products API](/api/catalog/products#get-products-with-discount).
+
+### Quick Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/with-discount/page/1?pageSize=20"
+```
+
+---
+
+## Discount Management Guide
+
+### Discount Types
+
+Wolfix.Server currently supports **percentage-based discounts**:
+- Minimum: 1%
+- Maximum: 99%
+- Applied to the base product price
+
+### Discount Calculation
+
+```
+Discounted Price = Original Price × (1 - Discount Percentage / 100)
+
+Example:
+Original Price: $100
+Discount: 25%
+Discounted Price: $100 × (1 - 0.25) = $75
+Savings: $25
+```
+
+### Scheduling Discounts
+
+<Steps>
+  <Step title="Set Start Date">
+    Specify when the discount becomes active (optional, defaults to immediate)
+  </Step>
+  <Step title="Set End Date">
+    Specify when the discount expires (optional, leave null for indefinite)
+  </Step>
+  <Step title="Automatic Activation">
+    Discount automatically activates at the specified start date
+  </Step>
+  <Step title="Automatic Expiration">
+    Discount automatically expires at the end date if specified
+  </Step>
+</Steps>
+
+### Best Practices
+
+<Info>
+  **Flash Sales**: Use short date ranges (e.g., 24-48 hours) to create urgency
+</Info>
+
+<Info>
+  **Seasonal Sales**: Schedule discounts for holidays or special events in advance
+</Info>
+
+<Info>
+  **Clearance**: Use indefinite discounts (no end date) for clearance items
+</Info>
+
+<Warning>
+  Frequent or excessive discounts may devalue your products. Use strategically to drive sales during slow periods.
+</Warning>
+
+### Discount Policies
+
+1. **One Discount Per Product** - Only one discount can be active at a time
+2. **Seller-Managed** - Each seller manages their own product discounts
+3. **Automatic Pricing** - Discounted prices are calculated and displayed automatically
+4. **Override Discounts** - Adding a new discount replaces any existing discount
+5. **Immediate Effect** - Discount changes take effect immediately (unless scheduled)
+
+### Monitoring Discount Performance
+
+Track the effectiveness of your discounts by monitoring:
+- Product views before and during discount period
+- Conversion rates
+- Total sales volume
+- Revenue impact
+- Customer acquisition from discounted products
+
+### Common Use Cases
+
+**Holiday Sale:**
+```json
+{
+  "discountPercentage": 20,
+  "startDate": "2024-12-20T00:00:00Z",
+  "endDate": "2024-12-26T23:59:59Z"
+}
+```
+
+**Flash Sale (24 hours):**
+```json
+{
+  "discountPercentage": 50,
+  "startDate": "2024-01-15T10:00:00Z",
+  "endDate": "2024-01-16T10:00:00Z"
+}
+```
+
+**Permanent Clearance:**
+```json
+{
+  "discountPercentage": 30,
+  "startDate": null,
+  "endDate": null
+}
+```
+
+**Upcoming Promotion:**
+```json
+{
+  "discountPercentage": 15,
+  "startDate": "2024-02-01T00:00:00Z",
+  "endDate": "2024-02-14T23:59:59Z"
+}
+```

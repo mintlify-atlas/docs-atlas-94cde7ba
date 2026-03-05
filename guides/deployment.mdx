@@ -1,0 +1,601 @@
+---
+title: Deployment Guide
+description: Deploy Wolfix.Server to production environments
+---
+
+This guide covers deploying Wolfix.Server to various production environments using Docker, Azure, and Kubernetes.
+
+## Deployment Overview
+
+Wolfix.Server can be deployed using:
+
+- **Docker** - Containerized deployment
+- **Azure App Service** - Managed PaaS
+- **Azure Container Apps** - Serverless containers
+- **Kubernetes** - Orchestrated containers
+- **VPS/VM** - Self-hosted on virtual machines
+
+## Docker Deployment
+
+### Building the Docker Image
+
+The project includes a Dockerfile for the API:
+
+```dockerfile Wolfix.API/Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+USER $APP_UID
+WORKDIR /app
+EXPOSE 8080
+EXPOSE 8081
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+ARG BUILD_CONFIGURATION=Release
+WORKDIR /src
+
+# Copy all project files
+COPY ["Wolfix.API/Wolfix.API.csproj", "Wolfix.API/"]
+COPY ["Admin.Endpoints/Admin.Endpoints.csproj", "Admin.Endpoints/"]
+# ... (all other projects)
+
+RUN dotnet restore "Wolfix.API/Wolfix.API.csproj"
+COPY . .
+WORKDIR "/src/Wolfix.API"
+RUN dotnet build "./Wolfix.API.csproj" -c $BUILD_CONFIGURATION -o /app/build
+
+FROM build AS publish
+ARG BUILD_CONFIGURATION=Release
+RUN dotnet publish "./Wolfix.API.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "Wolfix.API.dll"]
+```
+
+### Build the Image
+
+```bash
+# From the solution root
+docker build -t wolfix-api:latest -f Wolfix.API/Dockerfile .
+```
+
+### Run with Docker Compose
+
+Create a `docker-compose.yml` for production:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  api:
+    image: wolfix-api:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DB=Host=postgres;Port=5432;Database=wolfix;Username=postgres;Password=${POSTGRES_PASSWORD}
+      - MONGODB_CONNECTION_STRING=mongodb://mongo:27017
+      - MONGODB_DATABASE_NAME=wolfix-support
+      - TOKEN_ISSUER=${TOKEN_ISSUER}
+      - TOKEN_AUDIENCE=${TOKEN_AUDIENCE}
+      - TOKEN_KEY=${TOKEN_KEY}
+      - TOKEN_LIFETIME=3600
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_WEBHOOK_KEY=${STRIPE_WEBHOOK_KEY}
+      - BLOB=${AZURE_BLOB_CONNECTION}
+      - TOXIC_API_BASE_URL=http://toxic-api:8000
+    depends_on:
+      - postgres
+      - mongo
+      - toxic-api
+    restart: unless-stopped
+    networks:
+      - wolfix-network
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=wolfix
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - wolfix-network
+
+  mongo:
+    image: mongo:latest
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    restart: unless-stopped
+    networks:
+      - wolfix-network
+
+  toxic-api:
+    image: iluhahr/toxic-ai-api:latest
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - wolfix-network
+
+volumes:
+  postgres-data:
+  mongo-data:
+
+networks:
+  wolfix-network:
+    driver: bridge
+```
+
+### Deploy with Docker Compose
+
+```bash
+# Create .env file with secrets
+cat > .env << EOF
+POSTGRES_PASSWORD=your-secure-password
+TOKEN_ISSUER=https://yourdomain.com
+TOKEN_AUDIENCE=https://yourdomain.com
+TOKEN_KEY=your-secret-key-min-32-characters
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_PUBLISHABLE_KEY=pk_live_...
+STRIPE_WEBHOOK_KEY=whsec_...
+AZURE_BLOB_CONNECTION=DefaultEndpointsProtocol=https;...
+EOF
+
+# Start all services
+docker-compose up -d
+
+# Check logs
+docker-compose logs -f api
+
+# Apply migrations
+docker-compose exec api dotnet ef database update --project Admin.Infrastructure
+# Repeat for all modules
+```
+
+<Warning>
+  Never commit the `.env` file to version control. Use secrets management in production.
+</Warning>
+
+## Azure Deployment
+
+### Azure Container Apps (Recommended)
+
+Azure Container Apps provides serverless container hosting with built-in scaling.
+
+<Steps>
+  <Step title="Install Azure CLI">
+    ```bash
+    # Install Azure CLI
+    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+    
+    # Login
+    az login
+    ```
+  </Step>
+
+  <Step title="Create Resource Group">
+    ```bash
+    az group create \
+      --name wolfix-rg \
+      --location eastus
+    ```
+  </Step>
+
+  <Step title="Create Container Registry">
+    ```bash
+    az acr create \
+      --resource-group wolfix-rg \
+      --name wolfixregistry \
+      --sku Basic
+    
+    # Enable admin access
+    az acr update --name wolfixregistry --admin-enabled true
+    
+    # Get credentials
+    az acr credential show --name wolfixregistry
+    ```
+  </Step>
+
+  <Step title="Push Image to ACR">
+    ```bash
+    # Login to ACR
+    az acr login --name wolfixregistry
+    
+    # Tag image
+    docker tag wolfix-api:latest wolfixregistry.azurecr.io/wolfix-api:latest
+    
+    # Push image
+    docker push wolfixregistry.azurecr.io/wolfix-api:latest
+    ```
+  </Step>
+
+  <Step title="Create Container Apps Environment">
+    ```bash
+    az containerapp env create \
+      --name wolfix-env \
+      --resource-group wolfix-rg \
+      --location eastus
+    ```
+  </Step>
+
+  <Step title="Deploy Container App">
+    ```bash
+    az containerapp create \
+      --name wolfix-api \
+      --resource-group wolfix-rg \
+      --environment wolfix-env \
+      --image wolfixregistry.azurecr.io/wolfix-api:latest \
+      --target-port 8080 \
+      --ingress external \
+      --registry-server wolfixregistry.azurecr.io \
+      --registry-username <username> \
+      --registry-password <password> \
+      --env-vars \
+        ASPNETCORE_ENVIRONMENT=Production \
+        DB="<connection-string>" \
+        TOKEN_KEY="<token-key>" \
+        STRIPE_SECRET_KEY="<stripe-key>"
+    ```
+  </Step>
+</Steps>
+
+### Azure App Service
+
+Deploy directly to Azure App Service:
+
+```bash
+# Create App Service Plan
+az appservice plan create \
+  --name wolfix-plan \
+  --resource-group wolfix-rg \
+  --sku B1 \
+  --is-linux
+
+# Create Web App
+az webapp create \
+  --resource-group wolfix-rg \
+  --plan wolfix-plan \
+  --name wolfix-api \
+  --deployment-container-image-name wolfixregistry.azurecr.io/wolfix-api:latest
+
+# Configure app settings
+az webapp config appsettings set \
+  --resource-group wolfix-rg \
+  --name wolfix-api \
+  --settings \
+    ASPNETCORE_ENVIRONMENT=Production \
+    DB="<connection-string>" \
+    TOKEN_KEY="<token-key>"
+```
+
+## Kubernetes Deployment
+
+### Kubernetes Manifests
+
+Create Kubernetes deployment files:
+
+```yaml k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wolfix-api
+  labels:
+    app: wolfix-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: wolfix-api
+  template:
+    metadata:
+      labels:
+        app: wolfix-api
+    spec:
+      containers:
+      - name: api
+        image: wolfix-api:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: DB
+          valueFrom:
+            secretKeyRef:
+              name: wolfix-secrets
+              key: database-connection
+        - name: TOKEN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wolfix-secrets
+              key: token-key
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wolfix-api-service
+spec:
+  selector:
+    app: wolfix-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: LoadBalancer
+```
+
+```yaml k8s/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wolfix-secrets
+type: Opaque
+stringData:
+  database-connection: "Host=postgres;Port=5432;Database=wolfix;Username=postgres;Password=<password>"
+  token-key: "<your-secret-key>"
+  stripe-secret: "<stripe-secret-key>"
+```
+
+### Deploy to Kubernetes
+
+```bash
+# Apply secrets
+kubectl apply -f k8s/secrets.yaml
+
+# Deploy application
+kubectl apply -f k8s/deployment.yaml
+
+# Check status
+kubectl get pods
+kubectl get services
+
+# View logs
+kubectl logs -f deployment/wolfix-api
+```
+
+## Database Setup
+
+### PostgreSQL
+
+For production, use managed PostgreSQL:
+
+**Azure Database for PostgreSQL:**
+```bash
+az postgres flexible-server create \
+  --name wolfix-postgres \
+  --resource-group wolfix-rg \
+  --location eastus \
+  --admin-user wolfixadmin \
+  --admin-password <secure-password> \
+  --sku-name Standard_B1ms \
+  --tier Burstable \
+  --version 16
+```
+
+**AWS RDS PostgreSQL:**
+```bash
+aws rds create-db-instance \
+  --db-instance-identifier wolfix-postgres \
+  --db-instance-class db.t3.micro \
+  --engine postgres \
+  --engine-version 16 \
+  --master-username wolfixadmin \
+  --master-user-password <secure-password> \
+  --allocated-storage 20
+```
+
+### Apply Migrations
+
+After deployment, apply migrations:
+
+```bash
+# Connect to container
+docker exec -it <container-id> /bin/bash
+
+# Run migrations for each module
+dotnet ef database update --project Admin.Infrastructure --startup-project Wolfix.API
+dotnet ef database update --project Catalog.Infrastructure --startup-project Wolfix.API
+dotnet ef database update --project Customer.Infrastructure --startup-project Wolfix.API
+dotnet ef database update --project Identity.Infrastructure --startup-project Wolfix.API
+dotnet ef database update --project Media.Infrastructure --startup-project Wolfix.API
+dotnet ef database update --project Order.Infrastructure --startup-project Wolfix.API
+dotnet ef database update --project Seller.Infrastructure --startup-project Wolfix.API
+```
+
+<Tip>
+  For automated migrations, create a database initialization container that runs migrations on startup.
+</Tip>
+
+## Environment Variables
+
+### Required Variables
+
+```bash
+# Database
+DB=Host=<host>;Port=5432;Database=wolfix;Username=<user>;Password=<password>
+
+# MongoDB
+MONGODB_CONNECTION_STRING=mongodb://<host>:27017
+MONGODB_DATABASE_NAME=wolfix-support
+MONGODB_LOGGING_DATABASE_URL=mongodb://<host>:27017/wolfix-logs
+MONGODB_LOGGING_COLLECTION_NAME=logs
+
+# JWT
+TOKEN_ISSUER=https://yourdomain.com
+TOKEN_AUDIENCE=https://yourdomain.com
+TOKEN_KEY=<secret-key-min-32-chars>
+TOKEN_LIFETIME=3600
+
+# Stripe
+STRIPE_PUBLISHABLE_KEY=pk_live_...
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_KEY=whsec_...
+
+# Azure Blob
+BLOB=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...
+
+# Google OAuth
+GOOGLE_PASSWORD=<oauth-password>
+
+# Toxicity API
+TOXIC_API_BASE_URL=http://toxic-api:8000
+```
+
+## Monitoring
+
+### Health Checks
+
+Wolfix.Server includes health check endpoints:
+
+- `/health` - Basic health check
+- `/health/ready` - Readiness probe
+- `/health/live` - Liveness probe
+
+### Logging
+
+Logs are written to MongoDB. Configure Serilog for production:
+
+```csharp
+builder.Host.UseSerilog((context, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .WriteTo.MongoDBBson(
+        databaseUrl,
+        collectionName: "logs",
+        cappedMaxSizeMb: 1000
+    )
+    .Enrich.FromLogContext());
+```
+
+### Application Insights (Azure)
+
+```bash
+# Add package
+dotnet add package Microsoft.ApplicationInsights.AspNetCore
+```
+
+```csharp Program.cs
+builder.Services.AddApplicationInsightsTelemetry(
+    builder.Configuration["ApplicationInsights:ConnectionString"]
+);
+```
+
+## Security Considerations
+
+<Steps>
+  <Step title="Use HTTPS">
+    Always use HTTPS in production. Configure SSL/TLS certificates.
+  </Step>
+
+  <Step title="Secrets Management">
+    Use Azure Key Vault, AWS Secrets Manager, or Kubernetes Secrets for sensitive data.
+  </Step>
+
+  <Step title="Database Security">
+    - Use strong passwords
+    - Enable SSL connections
+    - Restrict network access
+    - Regular backups
+  </Step>
+
+  <Step title="Rate Limiting">
+    Implement rate limiting to prevent abuse:
+    ```csharp
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.AddFixedWindowLimiter("api", opt =>
+        {
+            opt.PermitLimit = 100;
+            opt.Window = TimeSpan.FromMinutes(1);
+        });
+    });
+    ```
+  </Step>
+</Steps>
+
+## CI/CD Pipeline
+
+### GitHub Actions
+
+```yaml .github/workflows/deploy.yml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '9.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore
+    
+    - name: Build
+      run: dotnet build --configuration Release
+    
+    - name: Test
+      run: dotnet test --no-build --verbosity normal
+    
+    - name: Build Docker image
+      run: docker build -t wolfix-api:${{ github.sha }} -f Wolfix.API/Dockerfile .
+    
+    - name: Push to ACR
+      run: |
+        docker login ${{ secrets.ACR_LOGIN_SERVER }} -u ${{ secrets.ACR_USERNAME }} -p ${{ secrets.ACR_PASSWORD }}
+        docker tag wolfix-api:${{ github.sha }} ${{ secrets.ACR_LOGIN_SERVER }}/wolfix-api:latest
+        docker push ${{ secrets.ACR_LOGIN_SERVER }}/wolfix-api:latest
+    
+    - name: Deploy to Azure Container Apps
+      run: |
+        az containerapp update \
+          --name wolfix-api \
+          --resource-group wolfix-rg \
+          --image ${{ secrets.ACR_LOGIN_SERVER }}/wolfix-api:latest
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Migrations" icon="database" href="/guides/database-migrations">
+    Learn migration strategies for production
+  </Card>
+  
+  <Card title="Aspire Orchestration" icon="cubes" href="/guides/aspire-orchestration">
+    Learn about .NET Aspire orchestration
+  </Card>
+</CardGroup>

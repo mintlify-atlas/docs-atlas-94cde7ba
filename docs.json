@@ -1,122 +1,162 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Wolfix.Server",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#6421e6",
+    "light": "#b48cf4",
+    "dark": "#e2dae9"
   },
-  "favicon": "/favicon.svg",
+
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Dmytro-Butnyk/Wolfix.Server"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Dmytro-Butnyk/Wolfix.Server"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Getting Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "architecture"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/modular-monolith",
+              "concepts/clean-architecture",
+              "concepts/domain-driven-design",
+              "concepts/result-pattern"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/development",
+              "guides/deployment",
+              "guides/database-migrations",
+              "guides/aspire-orchestration"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Integrations",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "integrations/stripe-payments",
+              "integrations/azure-storage",
+              "integrations/google-oauth",
+              "integrations/toxicity-api"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Overview",
             "pages": [
-              "api-reference/introduction"
+              "api/overview",
+              "api/authentication"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Identity",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/identity/register",
+              "api/identity/login",
+              "api/identity/google-auth",
+              "api/identity/account-management"
+            ]
+          },
+          {
+            "group": "Catalog",
+            "pages": [
+              "api/catalog/products",
+              "api/catalog/categories",
+              "api/catalog/reviews",
+              "api/catalog/discounts"
+            ]
+          },
+          {
+            "group": "Order",
+            "pages": [
+              "api/order/create-order",
+              "api/order/manage-orders",
+              "api/order/delivery-methods",
+              "api/order/payments"
+            ]
+          },
+          {
+            "group": "Customer",
+            "pages": [
+              "api/customer/profile",
+              "api/customer/cart",
+              "api/customer/wishlist"
+            ]
+          },
+          {
+            "group": "Seller",
+            "pages": [
+              "api/seller/onboarding",
+              "api/seller/shop-management",
+              "api/seller/products"
+            ]
+          },
+          {
+            "group": "Media",
+            "pages": [
+              "api/media/upload",
+              "api/media/management"
+            ]
+          },
+          {
+            "group": "Support",
+            "pages": [
+              "api/support/tickets",
+              "api/support/disputes"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Modules",
+        "groups": [
+          {
+            "group": "Module Reference",
+            "pages": [
+              "modules/overview",
+              "modules/identity",
+              "modules/catalog",
+              "modules/order",
+              "modules/customer",
+              "modules/seller",
+              "modules/media",
+              "modules/support",
+              "modules/admin"
+            ]
+          },
+          {
+            "group": "Shared Components",
+            "pages": [
+              "modules/shared-domain",
+              "modules/shared-application",
+              "modules/shared-infrastructure"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

@@ -1,0 +1,567 @@
+---
+title: Stripe Payment Integration
+description: Processing payments with Stripe in the Order module
+---
+
+Wolfix.Server integrates with **Stripe** for payment processing in the Order module. This guide covers configuration, implementation, and testing of Stripe payments.
+
+## Overview
+
+The Order module uses Stripe for:
+
+- **Payment Intents** - Secure payment processing
+- **Webhooks** - Real-time payment notifications
+- **Customer Management** - Stripe customer profiles
+- **Refunds** - Payment refund processing
+
+## Configuration
+
+### Environment Variables
+
+Configure Stripe credentials in your `.env` file:
+
+```bash .env
+# Test keys (development)
+STRIPE_PUBLISHABLE_KEY=pk_test_51...
+STRIPE_SECRET_KEY=sk_test_51...
+STRIPE_WEBHOOK_KEY=whsec_...
+
+# Live keys (production)
+STRIPE_PUBLISHABLE_KEY=pk_live_51...
+STRIPE_SECRET_KEY=sk_live_51...
+STRIPE_WEBHOOK_KEY=whsec_...
+```
+
+<Warning>
+  Never commit Stripe keys to version control. Use environment variables or secrets management.
+</Warning>
+
+### Module Registration
+
+Stripe is configured when registering the Order module:
+
+```csharp Wolfix.API/Extensions/WebApplicationBuilderExtension.cs
+private static WebApplicationBuilder AddOrderModule(
+    this WebApplicationBuilder builder, 
+    string connectionString)
+{
+    string publishableKey = builder.Configuration.GetOrThrow("STRIPE_PUBLISHABLE_KEY");
+    string secretKey = builder.Configuration.GetOrThrow("STRIPE_SECRET_KEY");
+    string webhookKey = builder.Configuration.GetOrThrow("STRIPE_WEBHOOK_KEY");
+    
+    builder.Services.AddOrderModule(
+        connectionString, 
+        publishableKey, 
+        secretKey, 
+        webhookKey
+    );
+    
+    return builder;
+}
+```
+
+### Service Registration
+
+The Order module registers Stripe services:
+
+```csharp Order.Infrastructure/Extensions/ServiceCollectionExtensions.cs
+public static IServiceCollection AddOrderModule(
+    this IServiceCollection services,
+    string connectionString,
+    string publishableKey,
+    string secretKey,
+    string webhookKey)
+{
+    // Configure Stripe options
+    services.Configure<StripeOptions>(options =>
+    {
+        options.PublishableKey = publishableKey;
+        options.SecretKey = secretKey;
+        options.WebhookKey = webhookKey;
+    });
+    
+    // Register Stripe payment service
+    services.AddScoped<IPaymentService<StripePaymentResponse>, StripePaymentService>();
+    
+    // Other registrations...
+    
+    return services;
+}
+```
+
+## Implementation
+
+### Payment Service
+
+The `StripePaymentService` handles payment processing:
+
+```csharp Order.Infrastructure/Services/StripePaymentService.cs
+using Microsoft.Extensions.Options;
+using Order.Application.Contracts;
+using Order.Application.Models;
+using Order.Infrastructure.Options;
+using Shared.Domain.Models;
+using Stripe;
+
+namespace Order.Infrastructure.Services;
+
+internal sealed class StripePaymentService : IPaymentService<StripePaymentResponse>
+{
+    private readonly StripeClient _stripeClient;
+    
+    public StripePaymentService(IOptions<StripeOptions> stripeOptions)
+    {
+        _stripeClient = new StripeClient(stripeOptions.Value.SecretKey);
+    }
+    
+    public async Task<Result<StripePaymentResponse>> PayAsync(
+        decimal amount, 
+        string currency, 
+        string customerEmail, 
+        CancellationToken ct)
+    {
+        try
+        {
+            var options = new PaymentIntentCreateOptions
+            {
+                Amount = (long)(amount * 100), // Convert to cents
+                Currency = currency,
+                ReceiptEmail = customerEmail,
+                PaymentMethodTypes = ["card"]
+            };
+
+            PaymentIntentService service = new(_stripeClient);
+            PaymentIntent intent = await service.CreateAsync(options, cancellationToken: ct);
+
+            return Result<StripePaymentResponse>.Success(new StripePaymentResponse
+            {
+                PaymentIntentId = intent.Id,
+                ClientSecret = intent.ClientSecret
+            });
+        }
+        catch (StripeException ex)
+        {
+            return Result<StripePaymentResponse>.Failure(
+                $"Stripe error: {ex.Message}",
+                HttpStatusCode.InternalServerError
+            );
+        }
+    }
+}
+```
+
+### Options Model
+
+```csharp Order.Infrastructure/Options/StripeOptions.cs
+public class StripeOptions
+{
+    public string PublishableKey { get; set; } = string.Empty;
+    public string SecretKey { get; set; } = string.Empty;
+    public string WebhookKey { get; set; } = string.Empty;
+}
+```
+
+### Payment Response Model
+
+```csharp Order.Application/Models/StripePaymentResponse.cs
+public class StripePaymentResponse
+{
+    public string PaymentIntentId { get; init; } = string.Empty;
+    public string ClientSecret { get; init; } = string.Empty;
+}
+```
+
+## Payment Flow
+
+<Steps>
+  <Step title="Customer Creates Order">
+    Customer adds items to cart and initiates checkout:
+    
+    ```csharp Order.Application/Services/OrderService.cs
+    public async Task<Result<CreateOrderResponse>> CreateOrderAsync(
+        CreateOrderDto dto, 
+        Guid customerId, 
+        CancellationToken ct)
+    {
+        // 1. Create order
+        Result<Order> createResult = Order.Create(
+            customerId,
+            dto.Items,
+            dto.ShippingAddress
+        );
+        
+        if (createResult.IsFailure)
+            return Result<CreateOrderResponse>.Failure(createResult);
+        
+        Order order = createResult.Value!;
+        
+        // 2. Save order
+        await _orderRepository.AddAsync(order, ct);
+        await _orderRepository.SaveChangesAsync(ct);
+        
+        // 3. Create payment intent
+        Result<StripePaymentResponse> paymentResult = await _paymentService.PayAsync(
+            order.TotalAmount,
+            "usd",
+            dto.CustomerEmail,
+            ct
+        );
+        
+        if (paymentResult.IsFailure)
+            return Result<CreateOrderResponse>.Failure(paymentResult);
+        
+        // 4. Return response with client secret
+        return Result<CreateOrderResponse>.Success(new CreateOrderResponse
+        {
+            OrderId = order.Id,
+            ClientSecret = paymentResult.Value!.ClientSecret,
+            TotalAmount = order.TotalAmount
+        });
+    }
+    ```
+  </Step>
+
+  <Step title="Frontend Collects Payment">
+    Frontend uses Stripe.js to collect payment details:
+    
+    ```javascript
+    // Initialize Stripe
+    const stripe = Stripe('pk_test_...');
+    
+    // Create order and get client secret
+    const response = await fetch('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify(orderData)
+    });
+    const { clientSecret, orderId } = await response.json();
+    
+    // Confirm payment
+    const { error, paymentIntent } = await stripe.confirmCardPayment(
+      clientSecret,
+      {
+        payment_method: {
+          card: cardElement,
+          billing_details: {
+            email: 'customer@example.com'
+          }
+        }
+      }
+    );
+    
+    if (error) {
+      console.error(error.message);
+    } else if (paymentIntent.status === 'succeeded') {
+      console.log('Payment successful!');
+      window.location.href = `/orders/${orderId}/confirmation`;
+    }
+    ```
+  </Step>
+
+  <Step title="Stripe Sends Webhook">
+    When payment succeeds, Stripe sends a webhook to your server:
+    
+    ```csharp Order.Endpoints/Endpoints/WebhookEndpoints.cs
+    public static IEndpointRouteBuilder MapWebhookEndpoints(
+        this IEndpointRouteBuilder app)
+    {
+        app.MapPost("/api/webhooks/stripe", HandleStripeWebhook)
+            .WithTags("Webhooks")
+            .AllowAnonymous();
+        
+        return app;
+    }
+    
+    private static async Task<IResult> HandleStripeWebhook(
+        HttpContext context,
+        [FromServices] IOptions<StripeOptions> stripeOptions,
+        [FromServices] OrderService orderService,
+        CancellationToken ct)
+    {
+        var json = await new StreamReader(context.Request.Body).ReadToEndAsync(ct);
+        
+        try
+        {
+            var stripeEvent = EventUtility.ConstructEvent(
+                json,
+                context.Request.Headers["Stripe-Signature"],
+                stripeOptions.Value.WebhookKey
+            );
+            
+            if (stripeEvent.Type == Events.PaymentIntentSucceeded)
+            {
+                var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
+                await orderService.MarkOrderAsPaidAsync(
+                    paymentIntent!.Id, 
+                    ct
+                );
+            }
+            
+            return Results.Ok();
+        }
+        catch (StripeException)
+        {
+            return Results.BadRequest();
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Order Status Updated">
+    The order service marks the order as paid:
+    
+    ```csharp Order.Application/Services/OrderService.cs
+    public async Task<VoidResult> MarkOrderAsPaidAsync(
+        string paymentIntentId, 
+        CancellationToken ct)
+    {
+        // Find order by payment intent
+        Order? order = await _orderRepository
+            .GetByPaymentIntentIdAsync(paymentIntentId, ct);
+        
+        if (order == null)
+            return VoidResult.Failure("Order not found", HttpStatusCode.NotFound);
+        
+        // Mark as paid
+        VoidResult markPaidResult = order.MarkAsPaid();
+        if (markPaidResult.IsFailure)
+            return markPaidResult;
+        
+        // Save changes
+        await _orderRepository.UpdateAsync(order, ct);
+        await _orderRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+    ```
+  </Step>
+</Steps>
+
+## Testing Payments
+
+### Test Card Numbers
+
+Stripe provides test card numbers:
+
+| Card Number | Behavior |
+|-------------|----------|
+| 4242 4242 4242 4242 | Succeeds |
+| 4000 0000 0000 9995 | Declines (insufficient funds) |
+| 4000 0000 0000 9987 | Requires authentication (3D Secure) |
+| 4000 0025 0000 3155 | Succeeds with 3D Secure |
+
+Use any future expiry date, any CVC, and any postal code.
+
+### Testing Webhooks Locally
+
+Use Stripe CLI to forward webhooks:
+
+<Steps>
+  <Step title="Install Stripe CLI">
+    ```bash
+    # macOS
+    brew install stripe/stripe-cli/stripe
+    
+    # Windows
+    scoop install stripe
+    
+    # Linux
+    wget https://github.com/stripe/stripe-cli/releases/download/v1.17.0/stripe_1.17.0_linux_x86_64.tar.gz
+    tar -xvf stripe_1.17.0_linux_x86_64.tar.gz
+    ```
+  </Step>
+
+  <Step title="Login to Stripe">
+    ```bash
+    stripe login
+    ```
+  </Step>
+
+  <Step title="Forward Webhooks">
+    ```bash
+    stripe listen --forward-to localhost:5000/api/webhooks/stripe
+    ```
+    
+    Copy the webhook signing secret:
+    ```
+    Ready! Your webhook signing secret is whsec_... (^C to quit)
+    ```
+  </Step>
+
+  <Step title="Update .env File">
+    ```bash
+    STRIPE_WEBHOOK_KEY=whsec_...
+    ```
+  </Step>
+
+  <Step title="Trigger Test Events">
+    ```bash
+    stripe trigger payment_intent.succeeded
+    ```
+  </Step>
+</Steps>
+
+## Refunds
+
+Implement refund processing:
+
+```csharp Order.Infrastructure/Services/StripePaymentService.cs
+public async Task<VoidResult> RefundAsync(
+    string paymentIntentId, 
+    decimal amount, 
+    CancellationToken ct)
+{
+    try
+    {
+        var options = new RefundCreateOptions
+        {
+            PaymentIntent = paymentIntentId,
+            Amount = (long)(amount * 100)
+        };
+        
+        RefundService service = new(_stripeClient);
+        await service.CreateAsync(options, cancellationToken: ct);
+        
+        return VoidResult.Success();
+    }
+    catch (StripeException ex)
+    {
+        return VoidResult.Failure(
+            $"Refund failed: {ex.Message}",
+            HttpStatusCode.InternalServerError
+        );
+    }
+}
+```
+
+## Production Checklist
+
+<Steps>
+  <Step title="Switch to Live Keys">
+    Update `.env` with live Stripe keys:
+    ```bash
+    STRIPE_PUBLISHABLE_KEY=pk_live_...
+    STRIPE_SECRET_KEY=sk_live_...
+    ```
+  </Step>
+
+  <Step title="Configure Production Webhooks">
+    1. Go to Stripe Dashboard > Developers > Webhooks
+    2. Add endpoint: `https://yourdomain.com/api/webhooks/stripe`
+    3. Select events: `payment_intent.succeeded`, `payment_intent.payment_failed`
+    4. Copy webhook signing secret
+    5. Update `STRIPE_WEBHOOK_KEY` in production environment
+  </Step>
+
+  <Step title="Enable HTTPS">
+    Stripe requires HTTPS for webhooks in production.
+  </Step>
+
+  <Step title="Test in Production">
+    1. Use real card numbers
+    2. Monitor Stripe Dashboard for payments
+    3. Check webhook delivery logs
+  </Step>
+
+  <Step title="Set Up Monitoring">
+    Monitor failed payments and webhook errors:
+    ```csharp
+    catch (StripeException ex)
+    {
+        _logger.LogError(ex, "Stripe payment failed");
+        // Send alert
+    }
+    ```
+  </Step>
+</Steps>
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Use PaymentIntents">
+    PaymentIntents are the recommended way to handle payments:
+    - Support 3D Secure authentication
+    - Handle multiple payment attempts
+    - Better error handling
+  </Step>
+
+  <Step title="Verify Webhooks">
+    Always verify webhook signatures:
+    ```csharp
+    var stripeEvent = EventUtility.ConstructEvent(
+        json,
+        signature,
+        webhookSecret
+    );
+    ```
+  </Step>
+
+  <Step title="Handle Idempotency">
+    Stripe webhooks may be delivered multiple times. Make handlers idempotent:
+    ```csharp
+    public async Task<VoidResult> MarkOrderAsPaidAsync(string paymentIntentId)
+    {
+        Order? order = await _repository.GetByPaymentIntentIdAsync(paymentIntentId);
+        
+        // Idempotent check
+        if (order.Status == OrderStatus.Paid)
+            return VoidResult.Success(); // Already processed
+        
+        order.MarkAsPaid();
+        await _repository.SaveChangesAsync();
+        return VoidResult.Success();
+    }
+    ```
+  </Step>
+
+  <Step title="Log Everything">
+    Log all payment operations for debugging:
+    ```csharp
+    _logger.LogInformation(
+        "Payment intent created: {PaymentIntentId} for order {OrderId}",
+        paymentIntent.Id,
+        order.Id
+    );
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Payment Intent Creation Fails
+
+**Issue:** "Invalid API Key provided"
+
+**Solution:** Verify `STRIPE_SECRET_KEY` is set correctly and matches your environment (test/live).
+
+### Webhook Not Received
+
+**Issue:** Payment succeeds but order not marked as paid.
+
+**Solution:**
+1. Check webhook endpoint is publicly accessible
+2. Verify webhook signature matches
+3. Check Stripe Dashboard > Developers > Webhooks for delivery status
+
+### 3D Secure Not Working
+
+**Issue:** Payment requires authentication but fails.
+
+**Solution:** Ensure frontend handles `requires_action` status:
+```javascript
+if (paymentIntent.status === 'requires_action') {
+  const { error } = await stripe.handleCardAction(clientSecret);
+  // Handle error
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Azure Storage" icon="cloud" href="/integrations/azure-storage">
+    Integrate Azure Blob Storage
+  </Card>
+  
+  <Card title="Google OAuth" icon="key" href="/integrations/google-oauth">
+    Add Google authentication
+  </Card>
+</CardGroup>

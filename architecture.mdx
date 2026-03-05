@@ -1,0 +1,338 @@
+---
+title: Architecture Overview
+description: Understanding Wolfix.Server's modular monolith architecture
+---
+
+Wolfix.Server is built as a **modular monolith** using **.NET 9** and **Clean Architecture** principles. The application is divided into independent modules that communicate through integration events while sharing a single deployment unit.
+
+## Architecture Principles
+
+The architecture follows these key principles:
+
+- **Modular Monolith**: Logical separation of concerns within a single deployable application
+- **Clean Architecture**: Clear separation between Domain, Application, Infrastructure, and Presentation layers
+- **Domain-Driven Design**: Rich domain models with business logic encapsulated in aggregates
+- **Result Pattern**: Type-safe error handling without exceptions for business logic failures
+- **Event-Driven Communication**: Modules communicate via integration events through an in-memory event bus
+
+## Module Structure
+
+Wolfix.Server consists of the following modules:
+
+<CardGroup cols={2}>
+  <Card title="Admin" icon="shield">
+    Admin user management and permissions
+  </Card>
+  
+  <Card title="Catalog" icon="box">
+    Product catalog, categories, and reviews
+  </Card>
+  
+  <Card title="Customer" icon="user">
+    Customer profiles and account management
+  </Card>
+  
+  <Card title="Identity" icon="key">
+    Authentication, authorization, and JWT tokens
+  </Card>
+  
+  <Card title="Media" icon="image">
+    File storage and Azure Blob integration
+  </Card>
+  
+  <Card title="Order" icon="shopping-cart">
+    Order processing and Stripe payments
+  </Card>
+  
+  <Card title="Seller" icon="store">
+    Seller profiles and applications
+  </Card>
+  
+  <Card title="Support" icon="headset">
+    Customer support tickets (MongoDB)
+  </Card>
+</CardGroup>
+
+## Layer Organization
+
+Each module follows a consistent four-layer structure:
+
+```
+{Module}.Domain/          # Entities, Value Objects, Domain Logic
+{Module}.Application/     # Use Cases, DTOs, Services
+{Module}.Infrastructure/  # Database, External Services
+{Module}.Endpoints/       # HTTP Endpoints (Minimal APIs)
+{Module}.IntegrationEvents/ # Cross-module event contracts
+{Module}.Tests/           # Unit and integration tests
+```
+
+### Example: Catalog Module
+
+```
+Catalog.Domain/
+  ├── ProductAggregate/
+  │   ├── Product.cs              # Aggregate root
+  │   ├── Entities/Review.cs      # Child entity
+  │   └── ValueObjects/           # Value objects
+  ├── CategoryAggregate/
+  ├── Interfaces/                 # Repository interfaces
+  └── Services/                   # Domain services
+
+Catalog.Application/
+  ├── Services/
+  │   ├── ProductService.cs       # Application service
+  │   └── CategoryService.cs
+  ├── Dto/                        # Data transfer objects
+  ├── Mapping/                    # DTO mappings
+  └── EventHandlers/              # Integration event handlers
+
+Catalog.Infrastructure/
+  ├── Repositories/               # EF Core repositories
+  ├── Configurations/             # EF entity configurations
+  ├── Migrations/                 # Database migrations
+  └── Services/
+      └── ToxicityService.cs      # External API integration
+
+Catalog.Endpoints/
+  └── Endpoints/                  # Minimal API endpoints
+
+Catalog.IntegrationEvents/
+  └── ProductCreated.cs           # Event contracts
+```
+
+## Shared Components
+
+Common functionality is shared across modules:
+
+### Shared.Domain
+
+Base classes and common domain logic:
+
+```csharp Shared.Domain/Entities/BaseEntity.cs
+namespace Shared.Domain.Entities;
+
+public abstract class BaseEntity
+{
+    public Guid Id { get; private set; }
+}
+```
+
+```csharp Shared.Domain/Models/Result.cs
+public sealed class Result<TValue>
+{
+    public TValue? Value { get; }
+    public string? ErrorMessage { get; }
+    public bool IsSuccess => ErrorMessage == null;
+    public bool IsFailure => !IsSuccess;
+    public HttpStatusCode StatusCode { get; }
+
+    public static Result<TValue> Success(TValue value, HttpStatusCode statusCode = HttpStatusCode.OK)
+        => new(value, statusCode);
+
+    public static Result<TValue> Failure(string errorMessage, HttpStatusCode statusCode = HttpStatusCode.BadRequest)
+        => new(errorMessage, statusCode);
+}
+```
+
+### Shared.Application
+
+Caching, common interfaces, and utilities:
+
+```csharp
+- Caching/            # Memory cache abstractions
+- Interfaces/         # Common service interfaces
+- Extensions/         # Helper extensions
+```
+
+### Shared.Infrastructure
+
+Common infrastructure concerns:
+
+```csharp
+- Repositories/       # Base repository implementations
+- ValueGenerators/    # EF Core value generators
+```
+
+### Shared.IntegrationEvents
+
+Event bus infrastructure:
+
+```csharp
+- EventBus.cs         # In-memory event bus
+- Interfaces/         # Event handler interfaces
+```
+
+## Module Communication
+
+Modules communicate exclusively through **integration events** to maintain loose coupling.
+
+### Event Publishing Example
+
+From `Identity.Application/Services/AuthService.cs`:
+
+```csharp Identity.Application/Services/AuthService.cs
+public async Task<Result<string>> RegisterAsync(RegisterAsCustomerDto dto, CancellationToken ct)
+{
+    Result<Guid> registerResult = await authStore.RegisterAccountAsync(
+        dto.Email,
+        dto.Password,
+        Roles.Customer,
+        ct
+    );
+
+    if (registerResult.IsFailure)
+    {
+        return Result<string>.Failure(registerResult);
+    }
+    
+    Guid registeredCustomerId = registerResult.Value;
+
+    // Publish integration event to Customer module
+    var @event = new CustomerAccountCreated
+    {
+        AccountId = registeredCustomerId
+    };
+    
+    Result<Guid> createCustomerResult = await eventBus
+        .PublishWithSingleResultAsync<CustomerAccountCreated, Guid>(@event, ct);
+
+    // ...
+}
+```
+
+### Event Handler Example
+
+From `Customer.Application/EventHandlers`:
+
+```csharp
+public class CustomerAccountCreatedHandler : IIntegrationEventHandler<CustomerAccountCreated, Guid>
+{
+    public async Task<Result<Guid>> HandleAsync(CustomerAccountCreated @event, CancellationToken ct)
+    {
+        // Create customer profile
+        // Return customer ID
+    }
+}
+```
+
+## Database Strategy
+
+### PostgreSQL (EF Core)
+
+Most modules use PostgreSQL with Entity Framework Core:
+
+- Admin, Catalog, Customer, Identity, Media, Order, Seller
+- Each module has its own `DbContext`
+- Separate migration history per module
+- Shared database with module-prefixed tables
+
+### MongoDB
+
+The Support module uses MongoDB for flexible document storage:
+
+- Ticket system with varying schemas
+- Automatic index creation on startup
+- Native JSON document storage
+
+## Entry Point: Wolfix.API
+
+The `Wolfix.API` project is the application entry point:
+
+```csharp Wolfix.API/Program.cs
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+builder.AddServiceDefaults();
+
+builder.Services.AddAuthorization();
+builder.Services.AddAuthentication();
+
+builder
+    .AddLoggingToMongoDb()
+    .AddAppCache()
+    .AddEventBus()
+    .AddResponseCompression()
+    .AddCors()
+    .AddSwaggerJwtBearer();
+
+// Register all module dependencies
+await builder.AddAllModules();
+
+// Register exception handling
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ExceptionHandler>();
+
+WebApplication app = builder.Build();
+
+app.MapDefaultEndpoints();
+app.UseStaticFiles();
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseSerilogRequestLogging();
+app.UseRouting();
+app.UseAuthorization();
+app.MapControllers();
+app.UseHttpsRedirection();
+app.UseExceptionHandler();
+app.UseResponseCompression();
+
+// Map all module endpoints
+app.MapAllEndpoints();
+
+app.UseCors("AllowNextClient");
+
+app.Run();
+```
+
+## Orchestration with .NET Aspire
+
+The `Wolfix.AppHost` project orchestrates the application and its dependencies:
+
+```csharp Wolfix.AppHost/AppHost.cs
+var builder = DistributedApplication.CreateBuilder(args);
+
+// Add containers
+var toxicApi = builder.AddContainer("toxic-api", "iluhahr/toxic-ai-api:latest")
+    .WithHttpEndpoint(targetPort: 8000);
+
+var mongoDb = builder.AddContainer("mongodb-local", "mongo", "latest")
+    .WithEndpoint(targetPort: 27017, port: 27017, name: "mongodb", scheme: "tcp");
+
+// Add API with dependencies
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WithEnvironment("TOXIC_API_BASE_URL", toxicApi.GetEndpoint("http"))
+    .WithCustomEnvironmentVariables(envKeyValues)
+    .WaitFor(toxicApi)
+    .WaitFor(mongoDb);
+
+builder.Build().Run();
+```
+
+<Info>
+  .NET Aspire provides a unified dashboard to monitor all services, view logs, and inspect traces.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Modular Monolith" icon="cubes" href="/concepts/modular-monolith">
+    Deep dive into the modular monolith pattern
+  </Card>
+  
+  <Card title="Clean Architecture" icon="layer-group" href="/concepts/clean-architecture">
+    Understand the layered architecture
+  </Card>
+  
+  <Card title="Domain-Driven Design" icon="brain" href="/concepts/domain-driven-design">
+    Learn about DDD in Wolfix.Server
+  </Card>
+  
+  <Card title="Result Pattern" icon="check-circle" href="/concepts/result-pattern">
+    Error handling without exceptions
+  </Card>
+</CardGroup>

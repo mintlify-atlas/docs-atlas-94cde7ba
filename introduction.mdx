@@ -1,0 +1,110 @@
+---
+title: "Introduction"
+description: "Enterprise-grade modular monolith e-commerce backend built with .NET 9, Clean Architecture, and Domain-Driven Design"
+---
+
+# Welcome to Wolfix.Server
+
+Wolfix.Server is a robust, scalable backend system designed for complex e-commerce ecosystems. By utilizing a **Modular Monolith** architecture, the project achieves high maintainability and logical isolation of business domains, making it ready for a future transition to microservices if needed.
+
+## Why Wolfix.Server?
+
+<CardGroup cols={2}>
+  <Card title="Modular Architecture" icon="cubes">
+    Clean separation of concerns with independent modules for Identity, Catalog, Order, Customer, Seller, Media, and Support
+  </Card>
+  <Card title="Clean Architecture" icon="layer-group">
+    Multi-layered design with Domain, Application, Infrastructure, and API layers ensuring testability and maintainability
+  </Card>
+  <Card title="Domain-Driven Design" icon="diagram-project">
+    Strong business logic encapsulation with Aggregates, Entities, and Value Objects following DDD principles
+  </Card>
+  <Card title="Production Ready" icon="rocket">
+    Built with .NET 9, PostgreSQL, Stripe payments, Azure storage, and comprehensive authentication
+  </Card>
+</CardGroup>
+
+## Key Features
+
+- **JWT Authentication** with Role-Based Access Control (RBAC)
+- **Google OAuth** integration for seamless sign-in
+- **Stripe Payment Processing** for secure transactions
+- **Azure Blob Storage** for scalable media management
+- **Result Pattern** for explicit error handling without exceptions
+- **Guid V7** identifiers for time-sortable primary keys
+- **.NET Aspire** orchestration for cloud-native development
+- **In-Memory Event Bus** for decoupled inter-module communication
+- **PostgreSQL** with separate schemas per module
+
+## Quick Start
+
+<CardGroup cols={2}>
+  <Card title="Get Started" icon="play" href="/quickstart">
+    Set up Wolfix.Server locally in minutes with .NET Aspire
+  </Card>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture">
+    Understand the modular monolith design and Clean Architecture layers
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore all available endpoints across modules
+  </Card>
+  <Card title="Development Guide" icon="wrench" href="/guides/development">
+    Learn how to develop and extend the system
+  </Card>
+</CardGroup>
+
+## Core Modules
+
+<CardGroup cols={3}>
+  <Card title="Identity" icon="shield-halved" href="/modules/identity">
+    Authentication, authorization, and user management
+  </Card>
+  <Card title="Catalog" icon="store" href="/modules/catalog">
+    Product management with variants and content moderation
+  </Card>
+  <Card title="Order" icon="cart-shopping" href="/modules/order">
+    Order lifecycle, delivery, and payment processing
+  </Card>
+  <Card title="Customer" icon="user" href="/modules/customer">
+    Customer profiles, carts, and wishlists
+  </Card>
+  <Card title="Seller" icon="briefcase" href="/modules/seller">
+    Seller onboarding and shop management
+  </Card>
+  <Card title="Media" icon="images" href="/modules/media">
+    Centralized media storage with Azure Blob
+  </Card>
+  <Card title="Support" icon="headset" href="/modules/support">
+    Ticketing system for dispute resolution
+  </Card>
+  <Card title="Admin" icon="user-shield" href="/modules/admin">
+    Administrative operations and system management
+  </Card>
+</CardGroup>
+
+## Technology Stack
+
+- **Framework**: .NET 9 (C# 13)
+- **Database**: PostgreSQL with EF Core
+- **Orchestration**: .NET Aspire
+- **Cloud**: Azure Blob Storage
+- **Payments**: Stripe SDK
+- **Caching**: ASP.NET Core In-Memory Cache
+- **Messaging**: MediatR-based event bus
+
+## Next Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    Get the source code from [GitHub](https://github.com/Dmytro-Butnyk/Wolfix.Server)
+  </Step>
+  <Step title="Install Prerequisites">
+    Ensure you have .NET 9 SDK and Docker Desktop installed
+  </Step>
+  <Step title="Run with Aspire">
+    Set **Wolfix.AppHost** as the startup project and press F5
+  </Step>
+  <Step title="Explore the API">
+    Access the Swagger UI at `https://localhost:5001/swagger` to test endpoints
+  </Step>
+</Steps>

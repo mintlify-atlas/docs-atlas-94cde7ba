@@ -1,0 +1,365 @@
+---
+title: 'Identity Module'
+description: 'Authentication, authorization, and user account management'
+icon: 'fingerprint'
+---
+
+## Overview
+
+The **Identity** module handles all authentication and authorization concerns for the Wolfix platform. It manages user accounts using ASP.NET Core Identity and issues JWT tokens for API authentication.
+
+<Note>
+  Identity is unique - it doesn't have a Domain layer because it uses ASP.NET Core Identity's built-in user management.
+</Note>
+
+## Bounded Context
+
+The Identity module is responsible for:
+
+- User registration (as Customer or Seller)
+- Authentication (email/password and Google OAuth)
+- JWT token generation and validation
+- Role management (Customer, Seller, Admin, Support)
+- Email verification and password reset
+- Account lifecycle (creation, deletion)
+
+## Layer Structure
+
+### Application Layer
+
+**Location**: `Identity.Application/`
+
+Contains authentication services and integration event handlers.
+
+#### Key Services
+
+<CodeGroup>
+
+```csharp Services/AuthService.cs
+public class AuthService
+{
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly SignInManager<ApplicationUser> _signInManager;
+    private readonly JwtService _jwtService;
+    
+    // Register new customer
+    public async Task<Result<TokenDto>> RegisterAsCustomerAsync(
+        RegisterAsCustomerDto dto, 
+        CancellationToken ct)
+    {
+        // Create Identity user
+        var user = new ApplicationUser 
+        { 
+            Email = dto.Email, 
+            UserName = dto.Email 
+        };
+        
+        var result = await _userManager.CreateAsync(user, dto.Password);
+        if (!result.Succeeded) return Result<TokenDto>.Failure(...);
+        
+        // Add role
+        await _userManager.AddToRoleAsync(user, "Customer");
+        
+        // Publish event to create Customer in Customer module
+        await _eventBus.PublishWithoutResultAsync(
+            new CustomerRegistered(user.Id, dto.Email), ct);
+        
+        // Generate JWT
+        var token = await _jwtService.GenerateTokenAsync(user);
+        return Result<TokenDto>.Success(new TokenDto(token));
+    }
+    
+    // Google OAuth login
+    public async Task<Result<TokenDto>> GoogleLoginAsync(
+        GoogleLoginDto dto, 
+        CancellationToken ct)
+    {
+        // Verify Google token
+        var payload = await _googleTokenValidator.ValidateAsync(dto.IdToken);
+        
+        // Find or create user
+        var user = await _userManager.FindByEmailAsync(payload.Email);
+        if (user == null)
+        {
+            user = new ApplicationUser 
+            { 
+                Email = payload.Email,
+                UserName = payload.Email,
+                EmailConfirmed = true
+            };
+            await _userManager.CreateAsync(user);
+            await _userManager.AddToRoleAsync(user, "Customer");
+            
+            // Notify Customer module
+            await _eventBus.PublishWithoutResultAsync(
+                new CustomerRegisteredViaGoogle(
+                    user.Id, 
+                    payload.GivenName, 
+                    payload.FamilyName, 
+                    payload.Picture
+                ), ct);
+        }
+        
+        var token = await _jwtService.GenerateTokenAsync(user);
+        return Result<TokenDto>.Success(new TokenDto(token));
+    }
+}
+```
+
+```csharp Services/JwtService.cs
+public class JwtService
+{
+    private readonly JwtOptions _options;
+    private readonly UserManager<ApplicationUser> _userManager;
+    
+    public async Task<string> GenerateTokenAsync(ApplicationUser user)
+    {
+        var roles = await _userManager.GetRolesAsync(user);
+        
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Email, user.Email!),
+            new("userId", user.Id.ToString())
+        };
+        
+        claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
+        
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SecretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        
+        var token = new JwtSecurityToken(
+            issuer: _options.Issuer,
+            audience: _options.Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(_options.ExpirationHours),
+            signingCredentials: creds
+        );
+        
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+}
+```
+
+</CodeGroup>
+
+#### Integration Event Handlers
+
+Identity responds to events from other modules:
+
+```csharp EventHandlers/CreateAdminEventHandler.cs
+public class CreateAdminEventHandler : 
+    IIntegrationEventHandler<CreateAdmin>
+{
+    public async Task<VoidResult> HandleAsync(CreateAdmin @event, CancellationToken ct)
+    {
+        var user = new ApplicationUser 
+        { 
+            Email = @event.Email, 
+            UserName = @event.Email,
+            EmailConfirmed = true
+        };
+        
+        await _userManager.CreateAsync(user, @event.Password);
+        await _userManager.AddToRoleAsync(user, "Admin");
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+<Accordion title="All Integration Event Handlers">
+- `CreateAdminEventHandler` - Creates admin account from Admin module
+- `CreateSupportEventHandler` - Creates support account
+- `CustomerWantsToBeSellerEventHandler` - Promotes customer to seller role
+- `DeleteAdminAccountEventHandler` - Removes admin account
+- `DeleteSellerAccountEventHandler` - Removes seller role
+- `DeleteSupportAccountEventHandler` - Removes support account
+- `SellerApplicationApprovedEventHandler` - Adds seller role when application approved
+</Accordion>
+
+### Infrastructure Layer
+
+**Location**: `Identity.Infrastructure/`
+
+#### Database Context
+
+```csharp Contexts/IdentityContext.cs
+public class IdentityContext : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>
+{
+    public IdentityContext(DbContextOptions<IdentityContext> options) 
+        : base(options) { }
+    
+    protected override void OnModelCreating(ModelBuilder builder)
+    {
+        base.OnModelCreating(builder);
+        
+        // Seed roles
+        builder.Entity<IdentityRole<Guid>>().HasData(
+            new IdentityRole<Guid> { Name = "Customer", NormalizedName = "CUSTOMER" },
+            new IdentityRole<Guid> { Name = "Seller", NormalizedName = "SELLER" },
+            new IdentityRole<Guid> { Name = "Admin", NormalizedName = "ADMIN" },
+            new IdentityRole<Guid> { Name = "Support", NormalizedName = "SUPPORT" }
+        );
+    }
+}
+```
+
+#### Auth Store (Redis)
+
+Refresh tokens are stored in Redis:
+
+```csharp Repositories/AuthStore.cs
+public class AuthStore : IAuthStore
+{
+    private readonly IConnectionMultiplexer _redis;
+    
+    public async Task StoreRefreshTokenAsync(
+        Guid userId, 
+        string refreshToken, 
+        TimeSpan expiration)
+    {
+        var db = _redis.GetDatabase();
+        await db.StringSetAsync(
+            $"refresh_token:{userId}", 
+            refreshToken, 
+            expiration);
+    }
+    
+    public async Task<string?> GetRefreshTokenAsync(Guid userId)
+    {
+        var db = _redis.GetDatabase();
+        return await db.StringGetAsync($"refresh_token:{userId}");
+    }
+}
+```
+
+### Endpoints Layer
+
+**Location**: `Identity.Endpoints/`
+
+```csharp Endpoints/AuthEndpoints.cs
+internal static class AuthEndpoints
+{
+    public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
+    {
+        var authGroup = app.MapGroup("api/auth")
+            .WithTags("Authentication");
+        
+        authGroup.MapPost("register/customer", RegisterAsCustomer)
+            .WithSummary("Register new customer account");
+        
+        authGroup.MapPost("register/seller", RegisterAsSeller)
+            .WithSummary("Register new seller account");
+        
+        authGroup.MapPost("login", Login)
+            .WithSummary("Authenticate with email and password");
+        
+        authGroup.MapPost("login/google", GoogleLogin)
+            .WithSummary("Authenticate with Google OAuth");
+        
+        authGroup.MapPost("refresh", RefreshToken)
+            .WithSummary("Refresh access token");
+        
+        authGroup.MapPost("change-password", ChangePassword)
+            .RequireAuthorization()
+            .WithSummary("Change user password");
+    }
+    
+    private static async Task<Results<Ok<TokenDto>, BadRequest<string>>> RegisterAsCustomer(
+        [FromBody] RegisterAsCustomerDto dto,
+        [FromServices] AuthService authService,
+        CancellationToken ct)
+    {
+        var result = await authService.RegisterAsCustomerAsync(dto, ct);
+        return result.IsSuccess 
+            ? TypedResults.Ok(result.Value!) 
+            : TypedResults.BadRequest(result.ErrorMessage!);
+    }
+}
+```
+
+## Integration Events Published
+
+Identity publishes these events to other modules:
+
+```csharp Identity.IntegrationEvents/
+public record CustomerRegistered(Guid AccountId, string Email) : IIntegrationEvent;
+public record CustomerRegisteredViaGoogle(
+    Guid AccountId, 
+    string FirstName, 
+    string LastName, 
+    string PhotoUrl
+) : IIntegrationEvent;
+public record SellerRegistered(
+    Guid AccountId,
+    string FirstName,
+    string LastName,
+    string MiddleName,
+    string PhoneNumber,
+    string City,
+    string Street,
+    uint HouseNumber,
+    uint? ApartmentNumber,
+    DateOnly BirthDate
+) : IIntegrationEvent;
+```
+
+## Integration Events Consumed
+
+<ResponseField name="CreateAdmin" type="event">
+  Sent by Admin module when creating a new admin account
+</ResponseField>
+
+<ResponseField name="CreateSupport" type="event">
+  Sent by Support module when creating a support agent
+</ResponseField>
+
+<ResponseField name="CustomerWantsToBeSeller" type="event">
+  Sent by Customer module when customer wants seller role
+</ResponseField>
+
+<ResponseField name="SellerApplicationApproved" type="event">
+  Sent by Seller module when seller application is approved
+</ResponseField>
+
+## Configuration
+
+### JWT Options
+
+```csharp appsettings.json
+{
+  "Jwt": {
+    "SecretKey": "your-secret-key-min-32-chars",
+    "Issuer": "Wolfix.API",
+    "Audience": "Wolfix.Client",
+    "ExpirationHours": 24
+  }
+}
+```
+
+### Dependency Injection
+
+```csharp Extensions/DependencyInjection.cs
+public static IServiceCollection AddIdentityApplication(
+    this IServiceCollection services,
+    IConfiguration configuration)
+{
+    services.Configure<JwtOptions>(configuration.GetSection("Jwt"));
+    services.AddScoped<AuthService>();
+    services.AddScoped<JwtService>();
+    
+    // Register event handlers
+    services.AddScoped<IIntegrationEventHandler<CreateAdmin>, CreateAdminEventHandler>();
+    // ... other handlers
+    
+    return services;
+}
+```
+
+## Related Modules
+
+- **Customer** - Receives registration events to create customer profiles
+- **Seller** - Receives registration events to create seller profiles
+- **Admin** - Sends events to create admin accounts
+- **Support** - Sends events to create support accounts

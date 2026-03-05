@@ -1,0 +1,515 @@
+---
+title: 'Catalog Module'
+description: 'Product catalog, categories, variants, and reviews management'
+icon: 'boxes-stacked'
+---
+
+## Overview
+
+The **Catalog** module is the heart of the e-commerce platform, managing products, categories, product variants, attributes, reviews, and discounts. It's one of the most complex modules in the system.
+
+## Bounded Context
+
+The Catalog module is responsible for:
+
+- Product catalog management (CRUD operations)
+- Category hierarchies (parent/child relationships)
+- Product variants (size, color, etc.) and attributes
+- Product reviews and ratings
+- Discount management and pricing calculations
+- Product media associations
+- Product search and filtering
+
+## Domain Layer
+
+**Location**: `Catalog.Domain/`
+
+### Aggregates
+
+#### Product Aggregate
+
+**Root**: `Product` entity
+
+```csharp ProductAggregate/Product.cs
+public sealed class Product : BaseEntity
+{
+    public string Title { get; private set; }
+    public string Description { get; private set; }
+    public decimal Price { get; private set; }
+    public ProductStatus Status { get; private set; }
+    public decimal FinalPrice { get; private set; }  // After discount
+    public Guid SellerId { get; private set; }
+    public Guid CategoryId { get; private set; }
+    
+    internal Discount? Discount { get; set; }
+    public uint Bonuses { get; private set; }
+    public double? AverageRating { get; private set; }
+    
+    private readonly List<ProductMedia> _productMedias = [];
+    public IReadOnlyCollection<ProductMediaInfo> ProductMedias => /* ... */;
+    
+    private readonly List<Review> _reviews = [];
+    public IReadOnlyCollection<ReviewInfo> Reviews => /* ... */;
+    
+    private readonly List<ProductAttributeValue> _productAttributeValues = [];
+    private readonly List<ProductVariantValue> _productVariantValues = [];
+    
+    public static Result<Product> Create(
+        string title, 
+        string description, 
+        decimal price, 
+        ProductStatus status, 
+        Guid categoryId, 
+        Guid sellerId)
+    {
+        // Validation
+        if (string.IsNullOrWhiteSpace(title))
+            return Result<Product>.Failure("Title is required");
+        if (price <= 0)
+            return Result<Product>.Failure("Price must be positive");
+        
+        var product = new Product(title, description, price, status, categoryId, sellerId);
+        product.RecalculateBonuses();
+        product.FinalPrice = price;
+        
+        return Result<Product>.Success(product, HttpStatusCode.Created);
+    }
+    
+    // Discount management
+    public VoidResult AddDiscount(uint percent, DateTime expirationDateTime)
+    {
+        Result<Discount> createDiscountResult = Discount.Create(percent, expirationDateTime, this);
+        return createDiscountResult.Map(
+            onSuccess: discount =>
+            {
+                Discount = discount;
+                RecalculateFinalPrice();
+                return VoidResult.Success();
+            },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage, createDiscountResult.StatusCode)
+        );
+    }
+    
+    // Review management
+    public VoidResult AddReview(string title, string text, uint rating, Guid customerId)
+    {
+        Result<Review> createReviewResult = Review.Create(title, text, rating, this, customerId);
+        return createReviewResult.Map(
+            onSuccess: review =>
+            {
+                _reviews.Add(review);
+                RecalculateAverageRating();
+                return VoidResult.Success();
+            },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    private void RecalculateFinalPrice()
+    {
+        if (Discount == null || Discount.Status == DiscountStatus.Expired)
+        {
+            FinalPrice = Price;
+            return;
+        }
+        FinalPrice = Price * (100 - Discount.Percent) / 100;
+    }
+    
+    private void RecalculateBonuses()
+    {
+        Bonuses = (uint)Math.Round(Price * 0.01m);
+    }
+    
+    private void RecalculateAverageRating()
+    {
+        AverageRating = _reviews.Count == 0
+            ? null
+            : Math.Round(_reviews.Average(r => r.Rating), MidpointRounding.AwayFromZero);
+    }
+}
+```
+
+**Child Entities**:
+
+<CodeGroup>
+
+```csharp Entities/Discount.cs
+public sealed class Discount : BaseEntity
+{
+    public uint Percent { get; private set; }
+    public DateTime ExpirationDateTime { get; private set; }
+    public DiscountStatus Status { get; private set; }
+    public Product Product { get; private set; }
+    
+    public static Result<Discount> Create(
+        uint percent, 
+        DateTime expirationDateTime, 
+        Product product)
+    {
+        if (percent is 0 or > 100)
+            return Result<Discount>.Failure("Percent must be between 1 and 100");
+        if (expirationDateTime <= DateTime.UtcNow)
+            return Result<Discount>.Failure("Expiration must be in the future");
+        
+        return Result<Discount>.Success(
+            new Discount(percent, expirationDateTime, product));
+    }
+}
+```
+
+```csharp Entities/Review.cs
+public sealed class Review : BaseEntity
+{
+    public string Title { get; private set; }
+    public string Text { get; private set; }
+    public uint Rating { get; private set; }  // 1-5
+    public Product Product { get; private set; }
+    public Guid CustomerId { get; private set; }
+    public DateTime CreatedAt { get; private set; }
+    
+    public static Result<Review> Create(
+        string title, 
+        string text, 
+        uint rating, 
+        Product product, 
+        Guid customerId)
+    {
+        if (rating is < 1 or > 5)
+            return Result<Review>.Failure("Rating must be between 1 and 5");
+        
+        return Result<Review>.Success(
+            new Review(title, text, rating, product, customerId));
+    }
+}
+```
+
+```csharp Entities/ProductMedia.cs
+public sealed class ProductMedia : BaseEntity
+{
+    public Product Product { get; private set; }
+    public Guid MediaId { get; private set; }
+    public BlobResourceType MediaType { get; private set; }
+    public string MediaUrl { get; private set; }
+    public bool IsMain { get; private set; }
+    
+    public void SetIsMain(bool isMain)
+    {
+        IsMain = isMain;
+    }
+}
+```
+
+</CodeGroup>
+
+#### Category Aggregate
+
+**Root**: `Category` entity
+
+```csharp CategoryAggregate/Category.cs
+public sealed class Category : BaseEntity
+{
+    public Guid BlobResourceId { get; private set; }
+    public string PhotoUrl { get; private set; }
+    public Category? Parent { get; private set; }
+    public string Name { get; private set; }
+    public string? Description { get; private set; }
+    
+    public bool IsParent => Parent == null;
+    public bool IsChild => Parent != null;
+    
+    private readonly List<Guid> _productIds = [];
+    public IReadOnlyCollection<Guid> ProductIds => _productIds.AsReadOnly();
+    
+    private readonly List<ProductVariant> _productVariants = [];
+    public IReadOnlyCollection<ProductVariantInfo> ProductVariants => /* ... */;
+    
+    private readonly List<ProductAttribute> _productAttributes = [];
+    public IReadOnlyCollection<ProductAttributeInfo> ProductAttributes => /* ... */;
+    
+    public int ProductsCount { get; private set; }
+    
+    public static Result<Category> Create(
+        Guid blobResourceId, 
+        string photoUrl, 
+        string name, 
+        string? description = null, 
+        Category? parent = null)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return Result<Category>.Failure("Name is required");
+        
+        var category = new Category(blobResourceId, photoUrl, name, description, parent)
+        {
+            ProductsCount = 0
+        };
+        return Result<Category>.Success(category, HttpStatusCode.Created);
+    }
+    
+    // Variant management
+    public VoidResult AddProductVariant(string key)
+    {
+        ProductVariant? existing = _productVariants.FirstOrDefault(pv => pv.Key == key);
+        if (existing != null)
+            return VoidResult.Failure("Variant already exists", HttpStatusCode.Conflict);
+        
+        Result<ProductVariant> result = ProductVariant.Create(this, key);
+        return result.Map(
+            onSuccess: variant => { _productVariants.Add(variant); return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+}
+```
+
+**Child Entities**:
+
+```csharp Entities/ProductVariant.cs
+// Example: "Size", "Color", "Material"
+public sealed class ProductVariant : BaseEntity
+{
+    public string Key { get; private set; }  // e.g., "Size"
+    public Category Category { get; private set; }
+    
+    public static Result<ProductVariant> Create(Category category, string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return Result<ProductVariant>.Failure("Key is required");
+        return Result<ProductVariant>.Success(new ProductVariant(category, key));
+    }
+}
+```
+
+```csharp Entities/ProductAttribute.cs
+// Example: "Brand", "Weight", "Warranty"
+public sealed class ProductAttribute : BaseEntity
+{
+    public string Key { get; private set; }  // e.g., "Brand"
+    public Category Category { get; private set; }
+}
+```
+
+### Domain Services
+
+```csharp Services/ProductDomainService.cs
+public class ProductDomainService
+{
+    public async Task<VoidResult> ValidateProductBeforeCreation(
+        Guid categoryId, 
+        Guid sellerId,
+        CancellationToken ct)
+    {
+        // Validate category exists
+        if (!await _categoryRepository.IsExistAsync(categoryId, ct))
+            return VoidResult.Failure("Category not found", HttpStatusCode.NotFound);
+        
+        // Validate seller exists via integration event
+        Result<bool> sellerExistsResult = await _eventBus
+            .PublishWithSingleResultAsync<CheckSellerExistsForProductAddition, bool>(
+                new CheckSellerExistsForProductAddition(sellerId), ct);
+        
+        if (sellerExistsResult.IsFailure || !sellerExistsResult.Value)
+            return VoidResult.Failure("Seller not found", HttpStatusCode.NotFound);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Application Layer
+
+**Location**: `Catalog.Application/`
+
+### Services
+
+```csharp Services/ProductService.cs
+public sealed class ProductService
+{
+    public async Task<Result<Guid>> AddProductAsync(
+        AddProductDto dto, 
+        Guid sellerId,
+        CancellationToken ct)
+    {
+        // Domain validation
+        VoidResult validationResult = await _productDomainService
+            .ValidateProductBeforeCreation(dto.CategoryId, sellerId, ct);
+        if (validationResult.IsFailure)
+            return Result<Guid>.Failure(validationResult);
+        
+        // Create product
+        Result<Product> createProductResult = Product.Create(
+            dto.Title, dto.Description, dto.Price, 
+            ProductStatus.Active, dto.CategoryId, sellerId);
+        if (createProductResult.IsFailure)
+            return Result<Guid>.Failure(createProductResult);
+        
+        Product product = createProductResult.Value!;
+        
+        // Add to repository
+        await _productRepository.AddAsync(product, ct);
+        await _productRepository.SaveChangesAsync(ct);
+        
+        // Add to category
+        Category? category = await _categoryRepository.GetByIdAsync(dto.CategoryId, ct);
+        category!.AddProductId(product.Id);
+        await _categoryRepository.SaveChangesAsync(ct);
+        
+        return Result<Guid>.Success(product.Id);
+    }
+    
+    public async Task<Result<IReadOnlyCollection<ProductShortDto>>> GetProductsByCategoryAsync(
+        Guid categoryId,
+        CancellationToken ct)
+    {
+        var products = await _productRepository
+            .GetByCategoryAsNoTrackingAsync(categoryId, ct);
+        
+        var dtos = products.Select(p => p.ToShortDto()).ToList();
+        return Result<IReadOnlyCollection<ProductShortDto>>.Success(dtos);
+    }
+}
+```
+
+### Event Handlers
+
+Catalog responds to events from other modules:
+
+```csharp EventHandlers/AddPhotoForNewCategoryHandler.cs
+public class AddPhotoForNewCategoryHandler : 
+    IIntegrationEventHandler<AddPhotoForNewCategory>
+{
+    public async Task<VoidResult> HandleAsync(
+        AddPhotoForNewCategory @event, 
+        CancellationToken ct)
+    {
+        Category? category = await _categoryRepository.GetByIdAsync(@event.CategoryId, ct);
+        if (category == null)
+            return VoidResult.Failure("Category not found", HttpStatusCode.NotFound);
+        
+        category.ChangePhotoUrl(@event.MediaUrl);
+        await _categoryRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Infrastructure Layer
+
+**Location**: `Catalog.Infrastructure/`
+
+### Repository Implementation
+
+```csharp Repositories/ProductRepository.cs
+public class ProductRepository : BaseRepository<CatalogContext, Product>, IProductRepository
+{
+    public async Task<Product?> GetByIdWithMediaAsync(Guid id, CancellationToken ct)
+    {
+        return await _context.Products
+            .Include(p => p.ProductMedias)
+            .Include(p => p.Discount)
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<ProductShortProjection>> GetByCategoryAsNoTrackingAsync(
+        Guid categoryId, 
+        CancellationToken ct)
+    {
+        return await _context.Products
+            .AsNoTracking()
+            .Where(p => p.CategoryId == categoryId)
+            .Select(p => new ProductShortProjection
+            {
+                Id = p.Id,
+                Title = p.Title,
+                Price = p.Price,
+                FinalPrice = p.FinalPrice,
+                MainPhotoUrl = p.ProductMedias.FirstOrDefault(pm => pm.IsMain)!.MediaUrl,
+                AverageRating = p.AverageRating
+            })
+            .ToListAsync(ct);
+    }
+}
+```
+
+### EF Core Configurations
+
+```csharp Configurations/ProductConfiguration.cs
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+    public void Configure(EntityTypeBuilder<Product> builder)
+    {
+        builder.HasKey(p => p.Id);
+        
+        builder.Property(p => p.Title).IsRequired().HasMaxLength(200);
+        builder.Property(p => p.Description).IsRequired().HasMaxLength(2000);
+        builder.Property(p => p.Price).HasColumnType("decimal(18,2)");
+        builder.Property(p => p.FinalPrice).HasColumnType("decimal(18,2)");
+        
+        builder.HasOne(p => p.Discount)
+            .WithOne(d => d.Product)
+            .HasForeignKey<Discount>(d => d.ProductId);
+        
+        builder.HasMany(p => p.ProductMedias)
+            .WithOne(pm => pm.Product)
+            .HasForeignKey(pm => pm.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Catalog.Endpoints/`
+
+```csharp Endpoints/ProductEndpoints.cs
+internal static class ProductEndpoints
+{
+    public static void MapProductEndpoints(this IEndpointRouteBuilder app)
+    {
+        var productGroup = app.MapGroup("api/products")
+            .WithTags("Products");
+        
+        productGroup.MapGet("{categoryId:guid}", GetProductsByCategory)
+            .WithSummary("Get products by category");
+        
+        productGroup.MapGet("{id:guid}/full", GetProductFull)
+            .WithSummary("Get full product details");
+        
+        productGroup.MapPost("", AddProduct)
+            .RequireAuthorization("Seller")
+            .WithSummary("Add new product");
+        
+        productGroup.MapPost("{productId:guid}/reviews", AddReview)
+            .RequireAuthorization("Customer")
+            .WithSummary("Add product review");
+        
+        productGroup.MapPost("{productId:guid}/discount", AddDiscount)
+            .RequireAuthorization("Seller")
+            .WithSummary("Add discount to product");
+    }
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Catalog.IntegrationEvents/
+public record CheckSellerExistsForProductAddition(Guid SellerId) : IIntegrationEvent;
+public record ProductMediaAdded(Guid ProductId, Guid MediaId) : IIntegrationEvent;
+public record ProductMediaDeleted(Guid MediaId) : IIntegrationEvent;
+public record ProductExistsForAddingToCart(Guid ProductId) : IIntegrationEvent;
+public record CheckCustomerExistsForAddingReview(Guid CustomerId) : IIntegrationEvent;
+```
+
+### Consumed
+
+- `AddPhotoForNewCategory` - From Media module
+- `FetchSellerInformation` - From Seller module
+
+## Related Modules
+
+- **Seller** - Products belong to sellers
+- **Media** - Product photos/videos stored in Media module
+- **Customer** - Reviews written by customers
+- **Order** - Orders contain products

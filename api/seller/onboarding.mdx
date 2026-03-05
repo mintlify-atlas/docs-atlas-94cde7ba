@@ -1,0 +1,377 @@
+---
+title: 'Seller Onboarding'
+description: 'Apply to become a seller on the platform'
+---
+
+## Create Seller Application (Customer)
+
+<api method="POST" path="/api/seller-applications/{accountId}" auth="Customer" />
+
+Submits an application to become a seller. Customers must be authenticated and can only apply for their own account.
+
+### Path Parameters
+
+<ParamField path="accountId" type="string (uuid)" required>
+  Account identifier (must match authenticated user)
+</ParamField>
+
+### Request Body (multipart/form-data)
+
+<ParamField body="shopName" type="string" required>
+  Proposed shop name
+</ParamField>
+
+<ParamField body="shopDescription" type="string" required>
+  Description of the shop and products
+</ParamField>
+
+<ParamField body="businessDocument" type="file" required>
+  Business license or registration document
+</ParamField>
+
+<ParamField body="phoneNumber" type="string" required>
+  Business contact phone number
+</ParamField>
+
+<ParamField body="address" type="object" required>
+  Business address details
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Application submitted successfully
+- `400 Bad Request` - Invalid application data or account already a seller
+- `404 Not Found` - Account not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/seller-applications/account-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "shopName=AudioPro Electronics" \
+  -F "shopDescription=Premium audio equipment and accessories" \
+  -F "businessDocument=@/path/to/license.pdf" \
+  -F "phoneNumber=+1-555-123-4567" \
+  -F 'address={"street":"123 Business Ave","city":"New York","state":"NY","zipCode":"10001","country":"USA"}'
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('shopName', 'AudioPro Electronics');
+formData.append('shopDescription', 'Premium audio equipment and accessories');
+formData.append('businessDocument', documentFile);
+formData.append('phoneNumber', '+1-555-123-4567');
+formData.append('address', JSON.stringify({
+  street: '123 Business Ave',
+  city: 'New York',
+  state: 'NY',
+  zipCode: '10001',
+  country: 'USA'
+}));
+
+const response = await fetch(
+  `https://your-server.com/api/seller-applications/${accountId}`,
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    },
+    body: formData
+  }
+);
+
+if (response.status === 204) {
+  console.log('Application submitted successfully');
+}
+```
+
+```python Python
+import requests
+
+files = {
+    'businessDocument': open('license.pdf', 'rb')
+}
+
+data = {
+    'shopName': 'AudioPro Electronics',
+    'shopDescription': 'Premium audio equipment and accessories',
+    'phoneNumber': '+1-555-123-4567',
+    'address': json.dumps({
+        'street': '123 Business Ave',
+        'city': 'New York',
+        'state': 'NY',
+        'zipCode': '10001',
+        'country': 'USA'
+    })
+}
+
+response = requests.post(
+    f'https://your-server.com/api/seller-applications/{account_id}',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    files=files,
+    data=data
+)
+
+if response.status_code == 204:
+    print('Application submitted successfully')
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**Already a Seller (400 Bad Request):**
+```json
+"Account is already registered as a seller"
+```
+
+**Missing Required Fields (400 Bad Request):**
+```json
+"Shop name is required"
+```
+
+**Invalid Document Format (400 Bad Request):**
+```json
+"Business document must be PDF format"
+```
+
+---
+
+## Get All Pending Applications (Admin)
+
+<api method="GET" path="/api/seller-applications" auth="Admin" />
+
+Retrieves all pending seller applications for review.
+
+### Response
+
+<ResponseField name="applications" type="array">
+  Array of pending seller application objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Applications retrieved successfully
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/seller-applications" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+[
+  {
+    "id": "application-uuid-1",
+    "accountId": "account-uuid-1",
+    "applicantEmail": "seller1@example.com",
+    "shopName": "AudioPro Electronics",
+    "shopDescription": "Premium audio equipment",
+    "phoneNumber": "+1-555-123-4567",
+    "address": {
+      "street": "123 Business Ave",
+      "city": "New York",
+      "state": "NY",
+      "zipCode": "10001",
+      "country": "USA"
+    },
+    "businessDocumentUrl": "https://storage.example.com/docs/license-1.pdf",
+    "status": "Pending",
+    "submittedAt": "2024-01-15T10:30:00Z"
+  },
+  {
+    "id": "application-uuid-2",
+    "accountId": "account-uuid-2",
+    "applicantEmail": "seller2@example.com",
+    "shopName": "TechGadgets Store",
+    "shopDescription": "Latest tech gadgets and accessories",
+    "phoneNumber": "+1-555-987-6543",
+    "address": {
+      "street": "456 Commerce St",
+      "city": "San Francisco",
+      "state": "CA",
+      "zipCode": "94102",
+      "country": "USA"
+    },
+    "businessDocumentUrl": "https://storage.example.com/docs/license-2.pdf",
+    "status": "Pending",
+    "submittedAt": "2024-01-16T14:20:00Z"
+  }
+]
+```
+
+---
+
+## Approve Seller Application (Admin)
+
+<api method="PATCH" path="/api/seller-applications/{sellerApplicationId}/approve" auth="Admin" />
+
+Approves a seller application, creating a seller account and granting seller role.
+
+### Path Parameters
+
+<ParamField path="sellerApplicationId" type="string (uuid)" required>
+  Seller application identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Application approved, seller account created
+- `400 Bad Request` - Application already processed
+- `404 Not Found` - Application not found
+- `409 Conflict` - Account already has seller role
+- `500 Internal Server Error` - Error creating seller account
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/seller-applications/application-uuid/approve" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+### Error Response Examples
+
+**Already Processed (400 Bad Request):**
+```json
+"Application has already been processed"
+```
+
+**Conflict (409 Conflict):**
+```json
+"Account already has seller role"
+```
+
+---
+
+## Reject Seller Application (Admin)
+
+<api method="PATCH" path="/api/seller-applications/{sellerApplicationId}/reject" auth="Admin" />
+
+Rejects a seller application.
+
+### Path Parameters
+
+<ParamField path="sellerApplicationId" type="string (uuid)" required>
+  Seller application identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Application rejected
+- `400 Bad Request` - Application already processed
+- `404 Not Found` - Application not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/seller-applications/application-uuid/reject" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+---
+
+## Seller Onboarding Process
+
+<Steps>
+  <Step title="Customer Creates Account">
+    User registers as a customer on the platform
+  </Step>
+  <Step title="Submit Seller Application">
+    Customer submits application with business details and documents
+  </Step>
+  <Step title="Application Review">
+    Admin reviews application and verifies business documents
+  </Step>
+  <Step title="Approval or Rejection">
+    Admin approves or rejects the application
+  </Step>
+  <Step title="Seller Account Creation">
+    If approved, seller account is created and seller role is granted
+  </Step>
+  <Step title="Setup Shop">
+    New seller can now log in with seller role and start adding products
+  </Step>
+</Steps>
+
+## Application Requirements
+
+### Required Information
+
+<ParamField body="shopName" type="string">
+  **Shop Name**: Unique, professional name for your shop (3-100 characters)
+</ParamField>
+
+<ParamField body="shopDescription" type="string">
+  **Description**: Clear description of your business and products (minimum 50 characters)
+</ParamField>
+
+<ParamField body="businessDocument" type="file">
+  **Business Document**: Valid business license, registration, or tax ID (PDF format, max 5MB)
+</ParamField>
+
+<ParamField body="phoneNumber" type="string">
+  **Contact Number**: Valid business phone number
+</ParamField>
+
+<ParamField body="address" type="object">
+  **Business Address**: Complete business address
+</ParamField>
+
+### Document Guidelines
+
+<Info>
+  **Accepted Documents:**
+  - Business license
+  - Company registration certificate
+  - Tax identification documents
+  - Seller permit or authorization
+</Info>
+
+<Warning>
+  Documents must be:
+  - Clear and legible
+  - Current (not expired)
+  - In PDF format
+  - Under 5MB file size
+</Warning>
+
+## Application Status
+
+Applications can have the following statuses:
+
+- **Pending** - Awaiting admin review
+- **Approved** - Application approved, seller account created
+- **Rejected** - Application rejected by admin
+
+## After Approval
+
+Once approved:
+
+1. **Seller Role Granted** - Account gains "Seller" role
+2. **Shop Created** - Shop is set up with provided details
+3. **Access Seller Features** - Can access seller dashboard and features
+4. **Add Products** - Can start listing products
+5. **Manage Orders** - Can view and fulfill orders
+
+## Tips for Successful Application
+
+<Info>
+  **Choose a Unique Shop Name**: Make it memorable and relevant to your products
+</Info>
+
+<Info>
+  **Write a Detailed Description**: Explain what makes your shop unique and what products you'll offer
+</Info>
+
+<Info>
+  **Provide Clear Documents**: Ensure all business documents are current, legible, and properly formatted
+</Info>
+
+<Info>
+  **Use Accurate Contact Information**: Admins may need to contact you during the review process
+</Info>

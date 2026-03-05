@@ -1,0 +1,415 @@
+---
+title: 'Products'
+description: 'Manage and browse product catalog'
+---
+
+## Get Product Details
+
+<api method="GET" path="/api/products/product/{productId}" auth="none" />
+
+Retrieves complete information about a specific product.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string (uuid)">
+  Product identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Product name
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Product description
+</ResponseField>
+
+<ResponseField name="price" type="number">
+  Product price
+</ResponseField>
+
+<ResponseField name="discountPrice" type="number">
+  Discounted price (if discount active)
+</ResponseField>
+
+<ResponseField name="mainPhotoUrl" type="string">
+  URL to main product image
+</ResponseField>
+
+<ResponseField name="category" type="object">
+  Product category information
+</ResponseField>
+
+<ResponseField name="seller" type="object">
+  Seller information
+</ResponseField>
+
+<ResponseField name="media" type="array">
+  Additional product images and videos
+</ResponseField>
+
+<ResponseField name="attributes" type="array">
+  Product attributes (size, color, material, etc.)
+</ResponseField>
+
+<ResponseField name="variants" type="array">
+  Product variants (if applicable)
+</ResponseField>
+
+<ResponseField name="averageRating" type="number">
+  Average customer rating
+</ResponseField>
+
+<ResponseField name="reviewCount" type="number">
+  Total number of reviews
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Product found
+- `400 Bad Request` - Invalid product ID format
+- `404 Not Found` - Product not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/product/3fa85f64-5717-4562-b3fc-2c963f66afa6"
+```
+
+### Success Response
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "name": "Premium Wireless Headphones",
+  "description": "High-quality wireless headphones with noise cancellation",
+  "price": 299.99,
+  "discountPrice": 249.99,
+  "mainPhotoUrl": "https://cdn.example.com/products/headphones-main.jpg",
+  "category": {
+    "id": "abc123",
+    "name": "Electronics",
+    "parentName": "Audio"
+  },
+  "seller": {
+    "id": "seller-uuid",
+    "shopName": "AudioPro Shop",
+    "rating": 4.8
+  },
+  "media": [
+    {
+      "id": "media-1",
+      "url": "https://cdn.example.com/products/headphones-2.jpg",
+      "type": "Image"
+    }
+  ],
+  "attributes": [
+    {
+      "name": "Color",
+      "value": "Black"
+    },
+    {
+      "name": "Battery Life",
+      "value": "30 hours"
+    }
+  ],
+  "averageRating": 4.5,
+  "reviewCount": 128
+}
+```
+
+---
+
+## Get Products by Category
+
+<api method="GET" path="/api/products/category/{childCategoryId}/page/{page}" auth="none" />
+
+Retrieves products in a specific category with pagination.
+
+### Path Parameters
+
+<ParamField path="childCategoryId" type="string (uuid)" required>
+  Child category identifier
+</ParamField>
+
+<ParamField path="page" type="integer" required>
+  Page number (starts at 1)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="20">
+  Number of products per page (default: 20)
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of product objects
+</ResponseField>
+
+<ResponseField name="totalCount" type="integer">
+  Total number of products in category
+</ResponseField>
+
+<ResponseField name="currentPage" type="integer">
+  Current page number
+</ResponseField>
+
+<ResponseField name="totalPages" type="integer">
+  Total number of pages
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Products retrieved
+- `400 Bad Request` - Invalid page number (must be > 0)
+- `404 Not Found` - Category not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/category/abc-123/page/1?pageSize=20"
+```
+
+---
+
+## Search Products
+
+<api method="GET" path="/api/products/search" auth="none" />
+
+Searches for products by query string.
+
+### Query Parameters
+
+<ParamField query="searchQuery" type="string" required>
+  Search query text
+</ParamField>
+
+<ParamField query="pageSize" type="integer" default="20">
+  Number of results to return
+</ParamField>
+
+### Response
+
+<ResponseField name="products" type="array">
+  Array of matching products
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Search completed
+- `400 Bad Request` - Invalid or empty search query
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/search?searchQuery=wireless+headphones&pageSize=20"
+```
+
+---
+
+## Get Products with Discount
+
+<api method="GET" path="/api/products/with-discount/page/{page}" auth="none" />
+
+Retrieves products that have active discounts.
+
+### Path Parameters
+
+<ParamField path="page" type="integer" required>
+  Page number (starts at 1)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="4">
+  Number of products per page
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/with-discount/page/1?pageSize=10"
+```
+
+---
+
+## Get Random Products
+
+<api method="GET" path="/api/products/random" auth="none" />
+
+Retrieves random products for homepage or discovery features.
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="12">
+  Number of random products to return
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/random?pageSize=12"
+```
+
+---
+
+## Create Product (Seller)
+
+<api method="POST" path="/api/products" auth="Seller" />
+
+Creates a new product listing.
+
+### Request Body (multipart/form-data)
+
+<ParamField body="name" type="string" required>
+  Product name
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Product description
+</ParamField>
+
+<ParamField body="price" type="number" required>
+  Product price
+</ParamField>
+
+<ParamField body="quantity" type="integer" required>
+  Available quantity
+</ParamField>
+
+<ParamField body="categoryId" type="string (uuid)" required>
+  Category ID
+</ParamField>
+
+<ParamField body="sellerId" type="string (uuid)" required>
+  Seller ID
+</ParamField>
+
+<ParamField body="mainPhoto" type="file" required>
+  Main product image file
+</ParamField>
+
+<ParamField body="attributes" type="array" required>
+  Product attributes (JSON)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Product created successfully
+- `400 Bad Request` - Invalid data or missing required fields
+- `404 Not Found` - Category or seller not found
+
+### Example
+
+```bash cURL
+curl -X POST "https://your-server.com/api/products" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "name=Premium Wireless Headphones" \
+  -F "description=High-quality audio" \
+  -F "price=299.99" \
+  -F "quantity=50" \
+  -F "categoryId=abc-123" \
+  -F "sellerId=seller-uuid" \
+  -F "mainPhoto=@/path/to/image.jpg" \
+  -F 'attributes=[{"attributeId":"attr-1","value":"Black"}]'
+```
+
+---
+
+## Update Product Price (Seller)
+
+<api method="PATCH" path="/api/products/product/{productId}/price" auth="Seller" />
+
+Updates the price of a product.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="newPrice" type="number" required>
+  New product price (must be > 0)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Price updated
+- `400 Bad Request` - Invalid price
+- `404 Not Found` - Product not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/products/product/3fa85f64/price" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"newPrice": 279.99}'
+```
+
+---
+
+## Delete Product (Seller)
+
+<api method="DELETE" path="/api/products/{productId}" auth="Seller" />
+
+Deletes a product listing.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Product deleted
+- `404 Not Found` - Product not found
+
+### Example
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/products/3fa85f64-5717-4562-b3fc-2c963f66afa6" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+---
+
+## Filter Products by Attributes
+
+<api method="POST" path="/api/products/filter-by-attributes" auth="none" />
+
+Filters products based on attribute values.
+
+### Request Body
+
+<ParamField body="categoryId" type="string (uuid)" required>
+  Category to filter within
+</ParamField>
+
+<ParamField body="filters" type="array" required>
+  Array of attribute filters
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X POST "https://your-server.com/api/products/filter-by-attributes" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "categoryId": "abc-123",
+    "filters": [
+      {"attributeName": "Color", "values": ["Black", "White"]},
+      {"attributeName": "Brand", "values": ["Sony"]}
+    ]
+  }'
+```

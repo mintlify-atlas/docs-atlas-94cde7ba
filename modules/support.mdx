@@ -1,0 +1,602 @@
+---
+title: 'Support Module'
+description: 'Support tickets, requests, and agent management'
+icon: 'headset'
+---
+
+## Overview
+
+The **Support** module manages customer support operations including ticket creation, categorization, assignment to support agents, and resolution tracking. It supports different request types (bugs, order issues, general inquiries).
+
+## Bounded Context
+
+The Support module is responsible for:
+
+- Support request creation and management
+- Request categorization (Bug/Error, Order Issue, General)
+- Support agent profiles
+- Request status tracking (Open, InProgress, Resolved, Closed)
+- Request-agent assignment
+- Request history and notes
+
+## Domain Layer
+
+**Location**: `Support.Domain/`
+
+### Entities
+
+#### Support Agent
+
+```csharp Entities/Support.cs
+public sealed class Support : BaseEntity
+{
+    public Guid AccountId { get; private set; }
+    public FullName FullName { get; private set; }
+    public PhoneNumber PhoneNumber { get; private set; }
+    public int ActiveRequestsCount { get; private set; }
+    
+    private Support() { }
+    
+    private Support(Guid accountId, FullName fullName, PhoneNumber phoneNumber)
+    {
+        AccountId = accountId;
+        FullName = fullName;
+        PhoneNumber = phoneNumber;
+        ActiveRequestsCount = 0;
+    }
+    
+    public static Result<Support> Create(
+        Guid accountId, string firstName, string lastName, 
+        string middleName, string phoneNumber)
+    {
+        if (accountId == Guid.Empty)
+            return Result<Support>.Failure("Account ID cannot be empty");
+        
+        Result<FullName> fullNameResult = FullName.Create(firstName, lastName, middleName);
+        if (fullNameResult.IsFailure)
+            return Result<Support>.Failure(fullNameResult);
+        
+        Result<PhoneNumber> phoneNumberResult = PhoneNumber.Create(phoneNumber);
+        if (phoneNumberResult.IsFailure)
+            return Result<Support>.Failure(phoneNumberResult);
+        
+        return Result<Support>.Success(
+            new Support(accountId, fullNameResult.Value!, phoneNumberResult.Value!));
+    }
+    
+    public VoidResult IncrementActiveRequests()
+    {
+        ActiveRequestsCount++;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult DecrementActiveRequests()
+    {
+        if (ActiveRequestsCount == 0)
+            return VoidResult.Failure("No active requests to decrement");
+        
+        ActiveRequestsCount--;
+        return VoidResult.Success();
+    }
+}
+```
+
+#### Support Requests (Hierarchy)
+
+**Base Class**:
+
+```csharp Entities/SupportRequests/BaseSupportRequest.cs
+public abstract class BaseSupportRequest : BaseEntity
+{
+    public Guid CustomerId { get; protected set; }
+    public string CustomerEmail { get; protected set; }
+    public string Title { get; protected set; }
+    public string Description { get; protected set; }
+    public SupportRequestStatus Status { get; protected set; }
+    public SupportRequestCategory Category { get; protected set; }
+    public Guid? AssignedSupportId { get; protected set; }
+    public DateTime CreatedAt { get; protected set; } = DateTime.UtcNow;
+    public DateTime? ResolvedAt { get; protected set; }
+    
+    protected BaseSupportRequest() { }
+    
+    protected BaseSupportRequest(
+        Guid customerId, string customerEmail, string title, 
+        string description, SupportRequestCategory category)
+    {
+        CustomerId = customerId;
+        CustomerEmail = customerEmail;
+        Title = title;
+        Description = description;
+        Status = SupportRequestStatus.Open;
+        Category = category;
+    }
+    
+    public VoidResult AssignToSupport(Guid supportId)
+    {
+        if (supportId == Guid.Empty)
+            return VoidResult.Failure("Support ID is required");
+        
+        AssignedSupportId = supportId;
+        Status = SupportRequestStatus.InProgress;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult MarkAsResolved()
+    {
+        if (Status == SupportRequestStatus.Resolved || Status == SupportRequestStatus.Closed)
+            return VoidResult.Failure("Request is already resolved or closed");
+        
+        Status = SupportRequestStatus.Resolved;
+        ResolvedAt = DateTime.UtcNow;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult Close()
+    {
+        if (Status != SupportRequestStatus.Resolved)
+            return VoidResult.Failure("Can only close resolved requests");
+        
+        Status = SupportRequestStatus.Closed;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult Reopen()
+    {
+        if (Status == SupportRequestStatus.Open || Status == SupportRequestStatus.InProgress)
+            return VoidResult.Failure("Request is already open");
+        
+        Status = SupportRequestStatus.Open;
+        AssignedSupportId = null;
+        ResolvedAt = null;
+        return VoidResult.Success();
+    }
+}
+```
+
+**Concrete Request Types**:
+
+<CodeGroup>
+
+```csharp Entities/BugOrErrorSupportRequest.cs
+public sealed class BugOrErrorSupportRequest : BaseSupportRequest
+{
+    public string StepsToReproduce { get; private set; }
+    public string? ScreenshotUrl { get; private set; }
+    public string BrowserInfo { get; private set; }
+    
+    private BugOrErrorSupportRequest() { }
+    
+    private BugOrErrorSupportRequest(
+        Guid customerId, string customerEmail, string title, string description,
+        string stepsToReproduce, string browserInfo, string? screenshotUrl = null)
+        : base(customerId, customerEmail, title, description, SupportRequestCategory.BugOrError)
+    {
+        StepsToReproduce = stepsToReproduce;
+        BrowserInfo = browserInfo;
+        ScreenshotUrl = screenshotUrl;
+    }
+    
+    public static Result<BugOrErrorSupportRequest> Create(
+        Guid customerId, string customerEmail, string title, string description,
+        string stepsToReproduce, string browserInfo, string? screenshotUrl = null)
+    {
+        if (string.IsNullOrWhiteSpace(stepsToReproduce))
+            return Result<BugOrErrorSupportRequest>.Failure("Steps to reproduce are required");
+        if (string.IsNullOrWhiteSpace(browserInfo))
+            return Result<BugOrErrorSupportRequest>.Failure("Browser info is required");
+        
+        return Result<BugOrErrorSupportRequest>.Success(
+            new BugOrErrorSupportRequest(
+                customerId, customerEmail, title, description, 
+                stepsToReproduce, browserInfo, screenshotUrl));
+    }
+}
+```
+
+```csharp Entities/OrderIssueSupportRequest.cs
+public sealed class OrderIssueSupportRequest : BaseSupportRequest
+{
+    public Guid OrderId { get; private set; }
+    public string OrderNumber { get; private set; }
+    public string IssueType { get; private set; }  // "Delivery", "Product", "Payment"
+    
+    private OrderIssueSupportRequest() { }
+    
+    private OrderIssueSupportRequest(
+        Guid customerId, string customerEmail, string title, string description,
+        Guid orderId, string orderNumber, string issueType)
+        : base(customerId, customerEmail, title, description, SupportRequestCategory.OrderIssue)
+    {
+        OrderId = orderId;
+        OrderNumber = orderNumber;
+        IssueType = issueType;
+    }
+    
+    public static Result<OrderIssueSupportRequest> Create(
+        Guid customerId, string customerEmail, string title, string description,
+        Guid orderId, string orderNumber, string issueType)
+    {
+        if (orderId == Guid.Empty)
+            return Result<OrderIssueSupportRequest>.Failure("Order ID is required");
+        if (string.IsNullOrWhiteSpace(orderNumber))
+            return Result<OrderIssueSupportRequest>.Failure("Order number is required");
+        if (string.IsNullOrWhiteSpace(issueType))
+            return Result<OrderIssueSupportRequest>.Failure("Issue type is required");
+        
+        return Result<OrderIssueSupportRequest>.Success(
+            new OrderIssueSupportRequest(
+                customerId, customerEmail, title, description, 
+                orderId, orderNumber, issueType));
+    }
+}
+```
+
+```csharp Entities/GeneralSupportRequest.cs
+public sealed class GeneralSupportRequest : BaseSupportRequest
+{
+    private GeneralSupportRequest() { }
+    
+    private GeneralSupportRequest(
+        Guid customerId, string customerEmail, string title, string description)
+        : base(customerId, customerEmail, title, description, SupportRequestCategory.General)
+    {
+    }
+    
+    public static Result<GeneralSupportRequest> Create(
+        Guid customerId, string customerEmail, string title, string description)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return Result<GeneralSupportRequest>.Failure("Title is required");
+        if (string.IsNullOrWhiteSpace(description))
+            return Result<GeneralSupportRequest>.Failure("Description is required");
+        
+        return Result<GeneralSupportRequest>.Success(
+            new GeneralSupportRequest(customerId, customerEmail, title, description));
+    }
+}
+```
+
+</CodeGroup>
+
+### Enums
+
+```csharp Enums/SupportRequestStatus.cs
+public enum SupportRequestStatus
+{
+    Open,        // Newly created, unassigned
+    InProgress,  // Assigned to support agent
+    Resolved,    // Issue resolved
+    Closed       // Closed by customer or auto-closed
+}
+
+public enum SupportRequestCategory
+{
+    BugOrError,  // Technical issues, bugs
+    OrderIssue,  // Order-related problems
+    General      // General inquiries
+}
+```
+
+### Repository Interfaces
+
+```csharp Interfaces/ISupportRepository.cs
+public interface ISupportRepository : IBaseRepository<Support>
+{
+    Task<Support?> GetByAccountIdAsync(Guid accountId, CancellationToken ct);
+    Task<Support?> GetWithLeastActiveRequestsAsync(CancellationToken ct);
+}
+
+public interface ISupportRequestRepository
+{
+    Task<BaseSupportRequest?> GetByIdAsync(Guid id, CancellationToken ct);
+    Task AddAsync(BaseSupportRequest request, CancellationToken ct);
+    Task<IReadOnlyCollection<SupportRequestProjection>> GetByCustomerIdAsync(
+        Guid customerId, CancellationToken ct);
+    Task<IReadOnlyCollection<SupportRequestProjection>> GetBySupportIdAsync(
+        Guid supportId, CancellationToken ct);
+    Task<IReadOnlyCollection<SupportRequestProjection>> GetOpenRequestsAsync(
+        CancellationToken ct);
+    Task SaveChangesAsync(CancellationToken ct);
+}
+```
+
+## Application Layer
+
+**Location**: `Support.Application/`
+
+### Services
+
+```csharp Services/SupportRequestService.cs
+public sealed class SupportRequestService
+{
+    public async Task<Result<Guid>> CreateBugReportAsync(
+        CreateBugReportDto dto,
+        Guid customerId,
+        string customerEmail,
+        CancellationToken ct)
+    {
+        Result<BugOrErrorSupportRequest> createResult = BugOrErrorSupportRequest.Create(
+            customerId, customerEmail, dto.Title, dto.Description,
+            dto.StepsToReproduce, dto.BrowserInfo, dto.ScreenshotUrl);
+        
+        if (createResult.IsFailure)
+            return Result<Guid>.Failure(createResult);
+        
+        BaseSupportRequest request = createResult.Value!;
+        
+        // Auto-assign to available support agent
+        Support? availableSupport = await _supportRepository
+            .GetWithLeastActiveRequestsAsync(ct);
+        
+        if (availableSupport != null)
+        {
+            request.AssignToSupport(availableSupport.Id);
+            availableSupport.IncrementActiveRequests();
+        }
+        
+        await _supportRequestRepository.AddAsync(request, ct);
+        await _supportRequestRepository.SaveChangesAsync(ct);
+        
+        if (availableSupport != null)
+        {
+            await _supportRepository.SaveChangesAsync(ct);
+        }
+        
+        return Result<Guid>.Success(request.Id);
+    }
+    
+    public async Task<Result<Guid>> CreateOrderIssueAsync(
+        CreateOrderIssueDto dto,
+        Guid customerId,
+        string customerEmail,
+        CancellationToken ct)
+    {
+        // Verify order exists
+        Result<OrderInfoDto> orderResult = await _eventBus
+            .PublishWithSingleResultAsync<FetchOrderInfo, OrderInfoDto>(
+                new FetchOrderInfo(dto.OrderId), ct);
+        
+        if (orderResult.IsFailure)
+            return Result<Guid>.Failure("Order not found", HttpStatusCode.NotFound);
+        
+        Result<OrderIssueSupportRequest> createResult = OrderIssueSupportRequest.Create(
+            customerId, customerEmail, dto.Title, dto.Description,
+            dto.OrderId, orderResult.Value!.OrderNumber, dto.IssueType);
+        
+        if (createResult.IsFailure)
+            return Result<Guid>.Failure(createResult);
+        
+        BaseSupportRequest request = createResult.Value!;
+        
+        // Auto-assign
+        Support? availableSupport = await _supportRepository
+            .GetWithLeastActiveRequestsAsync(ct);
+        if (availableSupport != null)
+        {
+            request.AssignToSupport(availableSupport.Id);
+            availableSupport.IncrementActiveRequests();
+        }
+        
+        await _supportRequestRepository.AddAsync(request, ct);
+        await _supportRequestRepository.SaveChangesAsync(ct);
+        
+        if (availableSupport != null)
+        {
+            await _supportRepository.SaveChangesAsync(ct);
+        }
+        
+        return Result<Guid>.Success(request.Id);
+    }
+    
+    public async Task<VoidResult> ResolveRequestAsync(
+        Guid requestId,
+        Guid supportId,
+        CancellationToken ct)
+    {
+        BaseSupportRequest? request = await _supportRequestRepository
+            .GetByIdAsync(requestId, ct);
+        if (request == null)
+            return VoidResult.Failure("Request not found", HttpStatusCode.NotFound);
+        
+        if (request.AssignedSupportId != supportId)
+            return VoidResult.Failure(
+                "You can only resolve requests assigned to you", HttpStatusCode.Forbidden);
+        
+        VoidResult resolveResult = request.MarkAsResolved();
+        if (resolveResult.IsFailure)
+            return resolveResult;
+        
+        await _supportRequestRepository.SaveChangesAsync(ct);
+        
+        // Decrement active requests count
+        Support? support = await _supportRepository.GetByIdAsync(supportId, ct);
+        support?.DecrementActiveRequests();
+        await _supportRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+### Integration Event Handlers
+
+```csharp EventHandlers/CreateSupportAccountHandler.cs
+public class CreateSupportAccountHandler : 
+    IIntegrationEventHandler<CreateSupport>
+{
+    public async Task<VoidResult> HandleAsync(
+        CreateSupport @event, 
+        CancellationToken ct)
+    {
+        Result<Support> createResult = Support.Create(
+            @event.AccountId, @event.FirstName, @event.LastName, 
+            @event.MiddleName, @event.PhoneNumber);
+        
+        if (createResult.IsFailure)
+            return VoidResult.Failure(createResult);
+        
+        await _supportRepository.AddAsync(createResult.Value!, ct);
+        await _supportRepository.SaveChangesAsync(ct);
+        
+        // Notify Identity to create support account
+        await _eventBus.PublishWithoutResultAsync(
+            new CreateSupportIdentity(@event.AccountId, @event.Email, @event.Password), ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Infrastructure Layer
+
+**Location**: `Support.Infrastructure.EFCore/` and `Support.Infrastructure.MongoDB/`
+
+<Note>
+  Support module has dual infrastructure implementations - EF Core for relational storage and MongoDB for document storage. This demonstrates polyglot persistence.
+</Note>
+
+### EF Core Implementation
+
+```csharp Repositories/SupportRequestRepository.cs
+public class SupportRequestRepository : ISupportRequestRepository
+{
+    private readonly SupportContext _context;
+    
+    public async Task<BaseSupportRequest?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        // Query all request types and find by ID
+        var bugRequest = await _context.BugOrErrorRequests
+            .FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (bugRequest != null) return bugRequest;
+        
+        var orderRequest = await _context.OrderIssueRequests
+            .FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (orderRequest != null) return orderRequest;
+        
+        return await _context.GeneralRequests
+            .FirstOrDefaultAsync(r => r.Id == id, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<SupportRequestProjection>> GetOpenRequestsAsync(
+        CancellationToken ct)
+    {
+        var bugRequests = _context.BugOrErrorRequests
+            .Where(r => r.Status == SupportRequestStatus.Open)
+            .Select(r => new SupportRequestProjection
+            {
+                Id = r.Id,
+                Title = r.Title,
+                Category = r.Category,
+                Status = r.Status,
+                CreatedAt = r.CreatedAt
+            });
+        
+        var orderRequests = _context.OrderIssueRequests
+            .Where(r => r.Status == SupportRequestStatus.Open)
+            .Select(r => new SupportRequestProjection { /* ... */ });
+        
+        var generalRequests = _context.GeneralRequests
+            .Where(r => r.Status == SupportRequestStatus.Open)
+            .Select(r => new SupportRequestProjection { /* ... */ });
+        
+        return await bugRequests
+            .Union(orderRequests)
+            .Union(generalRequests)
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync(ct);
+    }
+}
+```
+
+### EF Core Configuration
+
+```csharp Configurations/SupportRequestConfiguration.cs
+public class BugOrErrorRequestConfiguration : 
+    IEntityTypeConfiguration<BugOrErrorSupportRequest>
+{
+    public void Configure(EntityTypeBuilder<BugOrErrorSupportRequest> builder)
+    {
+        builder.ToTable("BugOrErrorRequests");
+        builder.HasKey(r => r.Id);
+        
+        builder.Property(r => r.Title).IsRequired().HasMaxLength(200);
+        builder.Property(r => r.Description).IsRequired().HasMaxLength(2000);
+        builder.Property(r => r.StepsToReproduce).IsRequired();
+        builder.Property(r => r.BrowserInfo).IsRequired();
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Support.Endpoints/`
+
+```csharp Endpoints/SupportEndpoints.cs
+internal static class SupportEndpoints
+{
+    public static void MapSupportEndpoints(this IEndpointRouteBuilder app)
+    {
+        var supportGroup = app.MapGroup("api/support")
+            .WithTags("Support");
+        
+        // Customer endpoints
+        supportGroup.MapPost("requests/bug", CreateBugReport)
+            .RequireAuthorization("Customer")
+            .WithSummary("Report a bug or error");
+        
+        supportGroup.MapPost("requests/order-issue", CreateOrderIssue)
+            .RequireAuthorization("Customer")
+            .WithSummary("Report an order issue");
+        
+        supportGroup.MapPost("requests/general", CreateGeneralRequest)
+            .RequireAuthorization("Customer")
+            .WithSummary("Create general support request");
+        
+        supportGroup.MapGet("requests/my", GetMyRequests)
+            .RequireAuthorization("Customer")
+            .WithSummary("Get my support requests");
+        
+        // Support agent endpoints
+        supportGroup.MapGet("requests/open", GetOpenRequests)
+            .RequireAuthorization("Support")
+            .WithSummary("Get all open requests");
+        
+        supportGroup.MapGet("requests/assigned", GetAssignedRequests)
+            .RequireAuthorization("Support")
+            .WithSummary("Get requests assigned to me");
+        
+        supportGroup.MapPost("requests/{id:guid}/resolve", ResolveRequest)
+            .RequireAuthorization("Support")
+            .WithSummary("Mark request as resolved");
+        
+        supportGroup.MapPost("requests/{id:guid}/assign", AssignRequest)
+            .RequireAuthorization("Support")
+            .WithSummary("Assign request to support agent");
+    }
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Support.IntegrationEvents/
+public record CreateSupport(
+    Guid AccountId, string Email, string Password,
+    string FirstName, string LastName, string MiddleName, string PhoneNumber
+) : IIntegrationEvent;
+
+public record FetchOrderInfo(Guid OrderId) : IIntegrationEvent;
+```
+
+### Consumed
+
+Support module primarily publishes events to Identity and consumes events from Admin module.
+
+## Related Modules
+
+- **Identity** - Support accounts created via Identity
+- **Admin** - Admins create support accounts
+- **Order** - Order issues reference orders
+- **Customer** - Customers create support requests

@@ -1,0 +1,81 @@
+---
+title: 'API Overview'
+description: 'Introduction to the Wolfix.Server REST API'
+---
+
+## Welcome to Wolfix.Server API
+
+The Wolfix.Server API is a RESTful API that provides comprehensive e-commerce functionality including user management, product catalog, order processing, and more.
+
+## Base URL
+
+All API endpoints are relative to your server's base URL:
+
+```
+https://your-server.com/api
+```
+
+## API Architecture
+
+The API is organized into the following modules:
+
+### Identity & Authentication
+Manage user accounts, authentication, and authorization for customers and sellers.
+
+### Catalog
+Browse and manage products, categories, reviews, and discounts.
+
+### Orders
+Create and manage customer orders, delivery methods, and payments.
+
+### Customer
+Manage customer profiles, shopping carts, and wishlists.
+
+### Seller
+Handle seller onboarding, shop management, and product inventory.
+
+### Media
+Upload and manage product images and other media files.
+
+### Support
+Submit and manage customer support tickets and disputes.
+
+## Response Format
+
+All responses are returned in JSON format. The API uses standard HTTP status codes:
+
+- `200 OK` - Request successful
+- `204 No Content` - Request successful with no response body
+- `400 Bad Request` - Invalid request parameters
+- `401 Unauthorized` - Missing or invalid authentication
+- `403 Forbidden` - Insufficient permissions
+- `404 Not Found` - Resource not found
+- `409 Conflict` - Resource conflict (e.g., duplicate email)
+- `500 Internal Server Error` - Server error
+
+## Error Responses
+
+Error responses include a descriptive message:
+
+```json
+"Error message describing what went wrong"
+```
+
+## Rate Limiting
+
+API rate limits may apply depending on your server configuration. Check response headers for rate limit information.
+
+## SDK Support
+
+Wolfix.Server uses ASP.NET Core Minimal APIs. You can generate client SDKs using OpenAPI/Swagger specifications.
+
+## Getting Started
+
+1. Review the [Authentication](/api/authentication) guide
+2. Explore endpoint documentation by module
+3. Test endpoints using the provided curl examples
+4. Integrate with your application
+
+## Support
+
+For API support and questions, refer to the [Support API](/api/support/tickets) to create support tickets.

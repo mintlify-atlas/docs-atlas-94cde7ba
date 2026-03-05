@@ -1,0 +1,301 @@
+---
+title: 'Delivery Methods'
+description: 'Manage available delivery and shipping options'
+---
+
+## Get Delivery Methods (Customer)
+
+<api method="GET" path="/api/delivery-methods/delivery-methods" auth="Customer" />
+
+Retrieves all available delivery methods for order checkout.
+
+### Response
+
+<ResponseField name="deliveryMethods" type="array">
+  Array of available delivery method objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Delivery methods retrieved successfully
+- `404 Not Found` - No delivery methods configured
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET "https://your-server.com/api/delivery-methods/delivery-methods" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://your-server.com/api/delivery-methods/delivery-methods',
+  {
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+const deliveryMethods = await response.json();
+console.log('Available delivery methods:', deliveryMethods);
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://your-server.com/api/delivery-methods/delivery-methods',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+delivery_methods = response.json()
+for method in delivery_methods:
+    print(f"{method['name']}: ${method['cost']} - {method['estimatedDays']}")
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("Authorization", $"Bearer {jwtToken}");
+
+var response = await client.GetAsync(
+    "https://your-server.com/api/delivery-methods/delivery-methods"
+);
+
+var deliveryMethods = await response.Content.ReadFromJsonAsync<List<DeliveryMethodDto>>();
+foreach (var method in deliveryMethods)
+{
+    Console.WriteLine($"{method.Name}: ${method.Cost} - {method.EstimatedDays}");
+}
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+[
+  {
+    "id": "dm-uuid-1",
+    "name": "Standard Shipping",
+    "description": "Regular ground shipping",
+    "cost": 9.99,
+    "estimatedDays": "3-5 business days",
+    "isActive": true
+  },
+  {
+    "id": "dm-uuid-2",
+    "name": "Express Shipping",
+    "description": "Fast delivery",
+    "cost": 24.99,
+    "estimatedDays": "1-2 business days",
+    "isActive": true
+  },
+  {
+    "id": "dm-uuid-3",
+    "name": "Next Day Delivery",
+    "description": "Guaranteed next business day",
+    "cost": 39.99,
+    "estimatedDays": "Next business day",
+    "isActive": true
+  },
+  {
+    "id": "dm-uuid-4",
+    "name": "Free Shipping",
+    "description": "Free standard shipping on orders over $50",
+    "cost": 0.00,
+    "estimatedDays": "5-7 business days",
+    "isActive": true,
+    "minimumOrderAmount": 50.00
+  },
+  {
+    "id": "dm-uuid-5",
+    "name": "Store Pickup",
+    "description": "Pick up from our store location",
+    "cost": 0.00,
+    "estimatedDays": "Available in 2-3 hours",
+    "isActive": true
+  }
+]
+```
+
+### Error Response
+
+**No Delivery Methods (404 Not Found):**
+```json
+"No delivery methods are currently available"
+```
+
+---
+
+## Delivery Method Details
+
+Each delivery method includes:
+
+### Fields
+
+<ParamField body="id" type="string (uuid)">
+  Unique identifier for the delivery method
+</ParamField>
+
+<ParamField body="name" type="string">
+  Display name (e.g., "Standard Shipping", "Express Delivery")
+</ParamField>
+
+<ParamField body="description" type="string">
+  Detailed description of the delivery method
+</ParamField>
+
+<ParamField body="cost" type="number">
+  Delivery cost in the system currency
+</ParamField>
+
+<ParamField body="estimatedDays" type="string">
+  Estimated delivery timeframe (e.g., "3-5 business days")
+</ParamField>
+
+<ParamField body="isActive" type="boolean">
+  Whether this method is currently available
+</ParamField>
+
+<ParamField body="minimumOrderAmount" type="number">
+  Minimum order amount required (optional, for free shipping tiers)
+</ParamField>
+
+---
+
+## Usage in Checkout Flow
+
+<Steps>
+  <Step title="Fetch Available Methods">
+    Call this endpoint during checkout to display available delivery options
+  </Step>
+  <Step title="Display to Customer">
+    Show delivery methods with costs and estimated delivery times
+  </Step>
+  <Step title="Customer Selection">
+    Customer selects preferred delivery method
+  </Step>
+  <Step title="Include in Order">
+    Use the selected delivery method ID when creating the order
+  </Step>
+</Steps>
+
+### Checkout Integration Example
+
+```javascript
+// Fetch delivery methods
+const response = await fetch('/api/delivery-methods/delivery-methods', {
+  headers: { 'Authorization': `Bearer ${token}` }
+});
+const methods = await response.json();
+
+// Display to user
+methods.forEach(method => {
+  // Filter by cart total if there's a minimum order amount
+  if (method.minimumOrderAmount && cartTotal < method.minimumOrderAmount) {
+    return; // Skip this method
+  }
+  
+  // Display method
+  console.log(`${method.name} - $${method.cost} (${method.estimatedDays})`);
+});
+
+// When user selects a method
+const selectedMethodId = 'dm-uuid-1';
+
+// Include in order creation
+const orderResponse = await fetch('/api/orders/with-payment', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    customerId: customerId,
+    deliveryMethodId: selectedMethodId,
+    deliveryAddress: address,
+    items: cartItems
+  })
+});
+```
+
+---
+
+## Common Delivery Method Types
+
+### Standard Shipping
+- **Cost**: Low to moderate
+- **Speed**: 3-7 business days
+- **Best for**: Regular orders, non-urgent items
+
+### Express Shipping
+- **Cost**: Moderate to high
+- **Speed**: 1-3 business days
+- **Best for**: Time-sensitive orders
+
+### Next Day Delivery
+- **Cost**: High
+- **Speed**: Next business day
+- **Best for**: Urgent needs
+
+### Free Shipping
+- **Cost**: Free (usually with minimum order)
+- **Speed**: Varies (usually slower)
+- **Best for**: Budget-conscious customers, larger orders
+
+### Store Pickup
+- **Cost**: Free
+- **Speed**: Same day availability
+- **Best for**: Local customers, avoiding shipping fees
+
+---
+
+## Important Notes
+
+<Info>
+  Delivery costs are added to the order total during checkout. Make sure to display the total including delivery cost before order confirmation.
+</Info>
+
+<Info>
+  Only active delivery methods (`isActive: true`) are returned by this endpoint.
+</Info>
+
+<Warning>
+  Delivery method availability and costs may change. Always fetch current delivery methods during checkout rather than caching them long-term.
+</Warning>
+
+## Calculation of Total Order Cost
+
+```javascript
+// Calculate order total including delivery
+const subtotal = cartItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+const deliveryCost = selectedDeliveryMethod.cost;
+const total = subtotal + deliveryCost;
+
+console.log(`Subtotal: $${subtotal}`);
+console.log(`Delivery: $${deliveryCost}`);
+console.log(`Total: $${total}`);
+```
+
+## Free Shipping Eligibility
+
+Some delivery methods may have a minimum order amount requirement:
+
+```javascript
+function isEligibleForMethod(method, cartTotal) {
+  if (method.minimumOrderAmount) {
+    return cartTotal >= method.minimumOrderAmount;
+  }
+  return true;
+}
+
+// Filter eligible methods
+const eligibleMethods = deliveryMethods.filter(method => 
+  method.isActive && isEligibleForMethod(method, cartTotal)
+);
+```

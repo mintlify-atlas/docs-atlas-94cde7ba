@@ -1,0 +1,448 @@
+---
+title: 'Shared.Application'
+description: 'Shared application layer components: DTOs, caching, and base services'
+icon: 'layer-group'
+---
+
+## Overview
+
+The **Shared.Application** module contains common application-layer abstractions and utilities used across all business modules. It provides base DTOs, caching infrastructure, and shared interfaces.
+
+## Components
+
+### Base DTOs
+
+Common data transfer objects used across modules:
+
+#### BaseDto
+
+```csharp Dto/BaseDto.cs
+namespace Shared.Application.Dto;
+
+public abstract class BaseDto
+{
+    public Guid Id { get; set; }
+}
+```
+
+#### Common DTOs
+
+<CodeGroup>
+
+```csharp Dto/FullNameDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class FullNameDto
+{
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public string? MiddleName { get; set; }
+    
+    public string GetFullName()
+    {
+        return string.IsNullOrWhiteSpace(MiddleName)
+            ? $"{FirstName} {LastName}"
+            : $"{FirstName} {MiddleName} {LastName}";
+    }
+}
+```
+
+```csharp Dto/AddressDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class AddressDto
+{
+    public string City { get; set; } = string.Empty;
+    public string Street { get; set; } = string.Empty;
+    public uint HouseNumber { get; set; }
+    public uint? ApartmentNumber { get; set; }
+    
+    public override string ToString()
+    {
+        return ApartmentNumber.HasValue
+            ? $"{City}, {Street} {HouseNumber}/{ApartmentNumber.Value}"
+            : $"{City}, {Street} {HouseNumber}";
+    }
+}
+```
+
+```csharp Dto/ChangeFullNameDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class ChangeFullNameDto
+{
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public string? MiddleName { get; set; }
+}
+```
+
+```csharp Dto/ChangeAddressDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class ChangeAddressDto
+{
+    public string City { get; set; } = string.Empty;
+    public string Street { get; set; } = string.Empty;
+    public uint HouseNumber { get; set; }
+    public uint? ApartmentNumber { get; set; }
+}
+```
+
+```csharp Dto/ChangePhoneNumberDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class ChangePhoneNumberDto
+{
+    public string PhoneNumber { get; set; } = string.Empty;
+}
+```
+
+```csharp Dto/ChangeBirthDateDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class ChangeBirthDateDto
+{
+    public DateOnly BirthDate { get; set; }
+}
+```
+
+</CodeGroup>
+
+### Pagination DTOs
+
+<CodeGroup>
+
+```csharp Dto/PaginationDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class PaginationDto<T>
+{
+    public IReadOnlyCollection<T> Items { get; set; } = Array.Empty<T>();
+    public int TotalCount { get; set; }
+    public int PageNumber { get; set; }
+    public int PageSize { get; set; }
+    public int TotalPages => (int)Math.Ceiling((double)TotalCount / PageSize);
+    public bool HasPreviousPage => PageNumber > 1;
+    public bool HasNextPage => PageNumber < TotalPages;
+}
+```
+
+```csharp Dto/CursorPaginationDto.cs
+namespace Shared.Application.Dto;
+
+public sealed class CursorPaginationDto<T>
+{
+    public IReadOnlyCollection<T> Items { get; set; } = Array.Empty<T>();
+    public string? NextCursor { get; set; }
+    public bool HasMore { get; set; }
+}
+```
+
+</CodeGroup>
+
+### Caching
+
+#### IAppCache Interface
+
+```csharp Interfaces/IAppCache.cs
+namespace Shared.Application.Interfaces;
+
+public interface IAppCache
+{
+    Task<T> GetOrCreateAsync<T>(
+        string key, 
+        Func<CancellationToken, Task<T>> factory, 
+        CancellationToken cancellationToken,
+        TimeSpan? expiration = null);
+    
+    Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken);
+    
+    Task SetAsync<T>(
+        string key, 
+        T value, 
+        TimeSpan? expiration, 
+        CancellationToken cancellationToken);
+    
+    Task RemoveAsync(string key, CancellationToken cancellationToken);
+    
+    Task RemoveByPrefixAsync(string prefix, CancellationToken cancellationToken);
+}
+```
+
+#### AppCache Implementation (Redis)
+
+```csharp Caching/AppCache.cs
+using System.Text.Json;
+using Microsoft.Extensions.Caching.Distributed;
+using Shared.Application.Interfaces;
+
+namespace Shared.Application.Caching;
+
+public sealed class AppCache : IAppCache
+{
+    private readonly IDistributedCache _cache;
+    private readonly JsonSerializerOptions _jsonOptions;
+    
+    public AppCache(IDistributedCache cache)
+    {
+        _cache = cache;
+        _jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        };
+    }
+    
+    public async Task<T> GetOrCreateAsync<T>(
+        string key, 
+        Func<CancellationToken, Task<T>> factory, 
+        CancellationToken cancellationToken,
+        TimeSpan? expiration = null)
+    {
+        // Try to get from cache
+        var cachedValue = await GetAsync<T>(key, cancellationToken);
+        if (cachedValue != null)
+            return cachedValue;
+        
+        // Execute factory to get value
+        var value = await factory(cancellationToken);
+        
+        // Store in cache
+        await SetAsync(key, value, expiration ?? TimeSpan.FromMinutes(10), cancellationToken);
+        
+        return value;
+    }
+    
+    public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken)
+    {
+        var cachedData = await _cache.GetStringAsync(key, cancellationToken);
+        if (string.IsNullOrEmpty(cachedData))
+            return default;
+        
+        return JsonSerializer.Deserialize<T>(cachedData, _jsonOptions);
+    }
+    
+    public async Task SetAsync<T>(
+        string key, 
+        T value, 
+        TimeSpan? expiration, 
+        CancellationToken cancellationToken)
+    {
+        var serializedData = JsonSerializer.Serialize(value, _jsonOptions);
+        
+        var options = new DistributedCacheEntryOptions();
+        if (expiration.HasValue)
+            options.AbsoluteExpirationRelativeToNow = expiration.Value;
+        
+        await _cache.SetStringAsync(key, serializedData, options, cancellationToken);
+    }
+    
+    public async Task RemoveAsync(string key, CancellationToken cancellationToken)
+    {
+        await _cache.RemoveAsync(key, cancellationToken);
+    }
+    
+    public async Task RemoveByPrefixAsync(string prefix, CancellationToken cancellationToken)
+    {
+        // Note: This requires Redis-specific implementation
+        // IDistributedCache doesn't support pattern-based deletion
+        // For Redis, use StackExchange.Redis directly:
+        // var keys = server.Keys(pattern: $"{prefix}*").ToArray();
+        // await db.KeyDeleteAsync(keys);
+        
+        throw new NotImplementedException(
+            "Pattern-based cache deletion requires direct Redis access");
+    }
+}
+```
+
+### Usage Example
+
+```csharp Services/CategoryService.cs (from Catalog module)
+public async Task<Result<IReadOnlyCollection<CategoryFullDto>>> GetAllParentCategoriesAsync(
+    CancellationToken ct, 
+    bool withCaching = true)
+{
+    const string cacheKey = "all_parent_categories";
+    
+    List<CategoryFullDto> parentCategoriesDto;
+    
+    if (withCaching)
+    {
+        // Use cache with 20-minute expiration
+        parentCategoriesDto = await _appCache.GetOrCreateAsync(
+            cacheKey, 
+            async ctx =>
+            {
+                IReadOnlyCollection<CategoryFullProjection> categories =
+                    await _categoryRepository.GetAllParentCategoriesAsNoTrackingAsync(ctx);
+                
+                return categories
+                    .Select(c => c.ToFullDto())
+                    .ToList();
+            }, 
+            ct, 
+            TimeSpan.FromMinutes(20));
+    }
+    else
+    {
+        // Bypass cache
+        IReadOnlyCollection<CategoryFullProjection> categories =
+            await _categoryRepository.GetAllParentCategoriesAsNoTrackingAsync(ct);
+        
+        parentCategoriesDto = categories
+            .Select(c => c.ToFullDto())
+            .ToList();
+    }
+    
+    return Result<IReadOnlyCollection<CategoryFullDto>>.Success(parentCategoriesDto);
+}
+```
+
+## Configuration
+
+### Dependency Injection
+
+```csharp Extensions/DependencyInjection.cs
+using Microsoft.Extensions.DependencyInjection;
+using Shared.Application.Caching;
+using Shared.Application.Interfaces;
+
+namespace Shared.Application.Extensions;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddSharedApplication(
+        this IServiceCollection services)
+    {
+        // Register caching
+        services.AddScoped<IAppCache, AppCache>();
+        
+        return services;
+    }
+}
+```
+
+### Redis Configuration
+
+```json appsettings.json
+{
+  "Redis": {
+    "ConnectionString": "localhost:6379,abortConnect=false"
+  }
+}
+```
+
+```csharp Program.cs
+// Add Redis distributed cache
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration["Redis:ConnectionString"];
+    options.InstanceName = "Wolfix_";
+});
+
+// Add shared application services
+builder.Services.AddSharedApplication();
+```
+
+## Caching Strategies
+
+### Cache-Aside Pattern
+
+The `GetOrCreateAsync` method implements the cache-aside pattern:
+
+1. Check if data exists in cache
+2. If found, return cached data
+3. If not found, fetch from source (database)
+4. Store in cache for future requests
+5. Return data
+
+### Cache Invalidation
+
+When data changes, invalidate the cache:
+
+```csharp Services/CategoryService.cs
+public async Task<VoidResult> UpdateCategoryAsync(
+    Guid categoryId, 
+    UpdateCategoryDto dto,
+    CancellationToken ct)
+{
+    // Update category
+    Category? category = await _categoryRepository.GetByIdAsync(categoryId, ct);
+    // ... update logic
+    
+    await _categoryRepository.SaveChangesAsync(ct);
+    
+    // Invalidate cache
+    await _appCache.RemoveAsync("all_parent_categories", ct);
+    await _appCache.RemoveAsync($"child_categories_by_parent_{category.ParentId}", ct);
+    
+    return VoidResult.Success();
+}
+```
+
+## Common DTO Patterns
+
+### Request DTOs
+
+Input models for API endpoints:
+
+```csharp
+public sealed class CreateProductDto
+{
+    public string Title { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public Guid CategoryId { get; set; }
+}
+```
+
+### Response DTOs
+
+Output models returned from services:
+
+```csharp
+public sealed class ProductDto : BaseDto
+{
+    public string Title { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public decimal FinalPrice { get; set; }
+    public string? MainPhotoUrl { get; set; }
+    public double? AverageRating { get; set; }
+}
+```
+
+### Update DTOs
+
+Partial update models:
+
+```csharp
+public sealed class UpdateProductDto
+{
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public decimal? Price { get; set; }
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Cache Key Naming" icon="key">
+    Use descriptive, hierarchical keys: `"module:entity:operation"` (e.g., `"catalog:categories:all_parents"`)
+  </Card>
+  <Card title="Expiration Times" icon="clock">
+    Set appropriate expiration based on data volatility - frequently changing data gets shorter TTL
+  </Card>
+  <Card title="DTO Validation" icon="check">
+    Use FluentValidation or DataAnnotations for DTO validation at the API boundary
+  </Card>
+  <Card title="Mapping" icon="arrow-right-arrow-left">
+    Keep mapping logic in dedicated mapper classes or extension methods
+  </Card>
+</CardGroup>
+
+## Related Modules
+
+- **Shared.Domain** - DTOs often map to/from domain entities and value objects
+- **All Business Modules** - All modules use shared DTOs and caching infrastructure

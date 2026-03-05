@@ -1,0 +1,419 @@
+---
+title: 'Create Order'
+description: 'Place new customer orders'
+---
+
+## Place Order with Payment (Customer)
+
+<api method="POST" path="/api/orders/with-payment" auth="Customer" />
+
+Creates a new order and initiates payment processing. Returns a client secret for completing payment on the client side (e.g., using Stripe).
+
+### Request Body
+
+<ParamField body="customerId" type="string (uuid)" required>
+  Customer identifier (must match authenticated user)
+</ParamField>
+
+<ParamField body="deliveryMethodId" type="string (uuid)" required>
+  Selected delivery method identifier
+</ParamField>
+
+<ParamField body="deliveryAddress" type="object" required>
+  Delivery address details
+</ParamField>
+
+<ParamField body="items" type="array" required>
+  Array of order items (productId, quantity, variantId if applicable)
+</ParamField>
+
+<ParamField body="notes" type="string">
+  Optional order notes or special instructions
+</ParamField>
+
+### Response
+
+<ResponseField name="orderId" type="string (uuid)">
+  Created order identifier
+</ResponseField>
+
+<ResponseField name="clientSecret" type="string">
+  Payment client secret for completing payment (e.g., Stripe client secret)
+</ResponseField>
+
+<ResponseField name="totalAmount" type="number">
+  Total order amount
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Order created, payment initiated
+- `400 Bad Request` - Invalid order data or insufficient stock
+- `404 Not Found` - Customer, delivery method, or product not found
+- `500 Internal Server Error` - Payment processing error
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/orders/with-payment" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "customer-uuid",
+    "deliveryMethodId": "delivery-method-uuid",
+    "deliveryAddress": {
+      "street": "123 Main St",
+      "city": "New York",
+      "state": "NY",
+      "zipCode": "10001",
+      "country": "USA"
+    },
+    "items": [
+      {
+        "productId": "product-uuid-1",
+        "quantity": 2,
+        "variantId": null
+      },
+      {
+        "productId": "product-uuid-2",
+        "quantity": 1,
+        "variantId": "variant-uuid"
+      }
+    ],
+    "notes": "Please ring doorbell upon delivery"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/orders/with-payment', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${jwtToken}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    customerId: customerId,
+    deliveryMethodId: deliveryMethodId,
+    deliveryAddress: {
+      street: '123 Main St',
+      city: 'New York',
+      state: 'NY',
+      zipCode: '10001',
+      country: 'USA'
+    },
+    items: [
+      {
+        productId: 'product-uuid-1',
+        quantity: 2,
+        variantId: null
+      }
+    ],
+    notes: 'Please ring doorbell upon delivery'
+  })
+});
+
+const orderData = await response.json();
+console.log('Order ID:', orderData.orderId);
+console.log('Client Secret:', orderData.clientSecret);
+
+// Use clientSecret with payment provider (e.g., Stripe)
+const stripe = Stripe('your-publishable-key');
+const { error } = await stripe.confirmPayment({
+  clientSecret: orderData.clientSecret,
+  // ... payment confirmation details
+});
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/orders/with-payment',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    json={
+        'customerId': customer_id,
+        'deliveryMethodId': delivery_method_id,
+        'deliveryAddress': {
+            'street': '123 Main St',
+            'city': 'New York',
+            'state': 'NY',
+            'zipCode': '10001',
+            'country': 'USA'
+        },
+        'items': [
+            {
+                'productId': 'product-uuid-1',
+                'quantity': 2,
+                'variantId': None
+            }
+        ],
+        'notes': 'Please ring doorbell upon delivery'
+    }
+)
+
+order_data = response.json()
+print(f"Order ID: {order_data['orderId']}")
+print(f"Client Secret: {order_data['clientSecret']}")
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+{
+  "orderId": "order-uuid",
+  "clientSecret": "pi_1234567890_secret_abcdefghijklmnop",
+  "totalAmount": 459.98
+}
+```
+
+### Error Response Examples
+
+**Insufficient Stock (400 Bad Request):**
+```json
+"Product 'Premium Headphones' has insufficient stock. Available: 1, Requested: 2"
+```
+
+**Invalid Delivery Method (404 Not Found):**
+```json
+"Delivery method not found"
+```
+
+**Payment Processing Error (500 Internal Server Error):**
+```json
+"Failed to initialize payment: [error details]"
+```
+
+---
+
+## Place Order without Payment (Customer)
+
+<api method="POST" path="/api/orders" auth="Customer" />
+
+Creates an order for cash-on-delivery or other non-prepaid payment methods.
+
+### Request Body
+
+<ParamField body="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+<ParamField body="deliveryMethodId" type="string (uuid)" required>
+  Selected delivery method identifier
+</ParamField>
+
+<ParamField body="deliveryAddress" type="object" required>
+  Delivery address details
+</ParamField>
+
+<ParamField body="items" type="array" required>
+  Array of order items
+</ParamField>
+
+<ParamField body="notes" type="string">
+  Optional order notes
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Order created successfully
+- `400 Bad Request` - Invalid order data
+- `404 Not Found` - Customer, delivery method, or product not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/orders" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "customer-uuid",
+    "deliveryMethodId": "delivery-method-uuid",
+    "deliveryAddress": {
+      "street": "123 Main St",
+      "city": "New York",
+      "state": "NY",
+      "zipCode": "10001",
+      "country": "USA"
+    },
+    "items": [
+      {
+        "productId": "product-uuid",
+        "quantity": 1
+      }
+    ]
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/orders', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${jwtToken}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    customerId: customerId,
+    deliveryMethodId: deliveryMethodId,
+    deliveryAddress: address,
+    items: items
+  })
+});
+
+if (response.status === 204) {
+  console.log('Order placed successfully');
+}
+```
+
+</CodeGroup>
+
+---
+
+## Mark Order as Paid (Customer)
+
+<api method="PATCH" path="/api/orders/{orderId}/paid" auth="Customer" />
+
+Marks an order as paid after successful payment confirmation. Typically called after payment provider confirms payment.
+
+### Path Parameters
+
+<ParamField path="orderId" type="string (uuid)" required>
+  Order identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Order marked as paid
+- `400 Bad Request` - Order already paid or payment failed
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/orders/order-uuid/paid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+// After successful payment confirmation from Stripe
+const response = await fetch(
+  `https://your-server.com/api/orders/${orderId}/paid`,
+  {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+if (response.status === 204) {
+  console.log('Order marked as paid');
+}
+```
+
+```python Python
+import requests
+
+response = requests.patch(
+    f'https://your-server.com/api/orders/{order_id}/paid',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+if response.status_code == 204:
+    print('Order marked as paid')
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**Already Paid (400 Bad Request):**
+```json
+"Order has already been marked as paid"
+```
+
+---
+
+## Order Creation Flow
+
+<Steps>
+  <Step title="Add Items to Cart">
+    Customer browses products and adds items to shopping cart
+  </Step>
+  <Step title="Proceed to Checkout">
+    Customer reviews cart and proceeds to checkout
+  </Step>
+  <Step title="Select Delivery">
+    Customer selects delivery method and provides delivery address
+  </Step>
+  <Step title="Choose Payment Method">
+    Customer chooses online payment or cash-on-delivery
+  </Step>
+  <Step title="Create Order">
+    Call `/api/orders/with-payment` (online) or `/api/orders` (COD)
+  </Step>
+  <Step title="Complete Payment (if online)">
+    Use client secret to complete payment with payment provider
+  </Step>
+  <Step title="Confirm Payment">
+    Call `/api/orders/{orderId}/paid` after payment success
+  </Step>
+  <Step title="Order Confirmation">
+    Customer receives order confirmation and tracking information
+  </Step>
+</Steps>
+
+## Order Validation
+
+<Info>
+  The system validates all order items before creation:
+  - Product availability
+  - Stock levels
+  - Price accuracy
+  - Delivery method compatibility
+</Info>
+
+<Warning>
+  Orders cannot be modified after creation. Customers must cancel and create a new order for changes.
+</Warning>
+
+## Payment Integration
+
+The order creation with payment typically integrates with payment providers like Stripe:
+
+1. Server creates order and payment intent
+2. Server returns client secret
+3. Client uses secret to complete payment
+4. Payment provider confirms payment
+5. Client calls `/paid` endpoint to finalize order
+
+### Stripe Example
+
+```javascript
+// 1. Create order and get client secret
+const orderResponse = await fetch('/api/orders/with-payment', {...});
+const { orderId, clientSecret } = await orderResponse.json();
+
+// 2. Confirm payment with Stripe
+const stripe = Stripe('pk_test_...');
+const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+  payment_method: {
+    card: cardElement,
+    billing_details: { name: 'Customer Name' }
+  }
+});
+
+// 3. Mark order as paid
+if (paymentIntent.status === 'succeeded') {
+  await fetch(`/api/orders/${orderId}/paid`, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+}
+```

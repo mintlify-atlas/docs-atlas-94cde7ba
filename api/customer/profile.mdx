@@ -1,0 +1,366 @@
+---
+title: 'Customer Profile'
+description: 'Manage customer profile information'
+---
+
+## Get Customer Profile (Customer)
+
+<api method="GET" path="/api/customers/{customerId}" auth="Customer" />
+
+Retrieves complete profile information for a customer.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier (must match authenticated user)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string (uuid)">
+  Customer identifier
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Customer email address
+</ResponseField>
+
+<ResponseField name="firstName" type="string">
+  Customer first name
+</ResponseField>
+
+<ResponseField name="lastName" type="string">
+  Customer last name
+</ResponseField>
+
+<ResponseField name="phoneNumber" type="string">
+  Customer phone number
+</ResponseField>
+
+<ResponseField name="address" type="object">
+  Customer address details
+</ResponseField>
+
+<ResponseField name="birthDate" type="string (date)">
+  Customer date of birth
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (datetime)">
+  Account creation timestamp
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Profile retrieved successfully
+- `404 Not Found` - Customer not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET "https://your-server.com/api/customers/customer-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/customers/${customerId}`,
+  {
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+const profile = await response.json();
+console.log('Customer:', profile);
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    f'https://your-server.com/api/customers/{customer_id}',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+profile = response.json()
+print(f"Name: {profile['firstName']} {profile['lastName']}")
+print(f"Email: {profile['email']}")
+```
+
+</CodeGroup>
+
+### Success Response
+
+```json
+{
+  "id": "customer-uuid",
+  "email": "customer@example.com",
+  "firstName": "John",
+  "lastName": "Doe",
+  "phoneNumber": "+1-555-123-4567",
+  "address": {
+    "street": "123 Main St",
+    "city": "New York",
+    "state": "NY",
+    "zipCode": "10001",
+    "country": "USA"
+  },
+  "birthDate": "1990-01-15",
+  "createdAt": "2024-01-01T10:00:00Z"
+}
+```
+
+---
+
+## Update Full Name (Customer)
+
+<api method="PATCH" path="/api/customers/{customerId}/full-name" auth="Customer" />
+
+Updates customer's first and last name.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="firstName" type="string" required>
+  New first name
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  New last name
+</ParamField>
+
+### Response
+
+<ResponseField name="firstName" type="string">
+  Updated first name
+</ResponseField>
+
+<ResponseField name="lastName" type="string">
+  Updated last name
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Name updated successfully
+- `400 Bad Request` - Invalid name format
+- `404 Not Found` - Customer not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/customers/customer-uuid/full-name" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "firstName": "Jane",
+    "lastName": "Smith"
+  }'
+```
+
+### Success Response
+
+```json
+{
+  "firstName": "Jane",
+  "lastName": "Smith"
+}
+```
+
+---
+
+## Update Phone Number (Customer)
+
+<api method="PATCH" path="/api/customers/{customerId}/phone-number" auth="Customer" />
+
+Updates customer's phone number.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="phoneNumber" type="string" required>
+  New phone number (format: +1-555-123-4567)
+</ParamField>
+
+### Response
+
+<ResponseField name="phoneNumber" type="string">
+  Updated phone number
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Phone number updated
+- `400 Bad Request` - Invalid phone number format
+- `404 Not Found` - Customer not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/customers/customer-uuid/phone-number" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"phoneNumber": "+1-555-987-6543"}'
+```
+
+---
+
+## Update Address (Customer)
+
+<api method="PATCH" path="/api/customers/{customerId}/address" auth="Customer" />
+
+Updates customer's address.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="street" type="string" required>
+  Street address
+</ParamField>
+
+<ParamField body="city" type="string" required>
+  City
+</ParamField>
+
+<ParamField body="state" type="string" required>
+  State/Province
+</ParamField>
+
+<ParamField body="zipCode" type="string" required>
+  ZIP/Postal code
+</ParamField>
+
+<ParamField body="country" type="string" required>
+  Country
+</ParamField>
+
+### Response
+
+<ResponseField name="address" type="object">
+  Updated address object
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Address updated
+- `400 Bad Request` - Invalid address data
+- `404 Not Found` - Customer not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/customers/customer-uuid/address" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "street": "456 Oak Avenue",
+    "city": "Los Angeles",
+    "state": "CA",
+    "zipCode": "90001",
+    "country": "USA"
+  }'
+```
+
+### Success Response
+
+```json
+{
+  "street": "456 Oak Avenue",
+  "city": "Los Angeles",
+  "state": "CA",
+  "zipCode": "90001",
+  "country": "USA"
+}
+```
+
+---
+
+## Update Birth Date (Customer)
+
+<api method="PATCH" path="/api/customers/{customerId}/birth-date" auth="Customer" />
+
+Updates customer's date of birth.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="birthDate" type="string (date)" required>
+  Date of birth (format: YYYY-MM-DD)
+</ParamField>
+
+### Response
+
+<ResponseField name="birthDate" type="string (date)">
+  Updated birth date
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Birth date updated
+- `400 Bad Request` - Invalid date format or future date
+- `404 Not Found` - Customer not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/customers/customer-uuid/birth-date" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"birthDate": "1985-06-15"}'
+```
+
+### Success Response
+
+```json
+"1985-06-15"
+```
+
+---
+
+## Profile Management Tips
+
+<Info>
+  Keep your profile information up to date to ensure accurate order delivery and communication.
+</Info>
+
+<Warning>
+  Email address changes must be done through the [Account Management](/api/identity/account-management) endpoints for security reasons.
+</Warning>
+
+### Data Validation
+
+All profile updates are validated:
+- **Names**: Must be non-empty, reasonable length
+- **Phone**: Must match international format
+- **Address**: All fields required for shipping
+- **Birth Date**: Must be in the past, valid date format
+
+### Privacy
+
+Customer profile data is:
+- Encrypted at rest
+- Only accessible by the authenticated customer
+- Used only for order fulfillment and communication
+- Not shared with third parties without consent

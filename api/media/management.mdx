@@ -1,0 +1,438 @@
+---
+title: 'Media Management'
+description: 'Manage and organize uploaded media files'
+---
+
+## Change Product Main Photo (Seller)
+
+<api method="PATCH" path="/api/products/product/{productId}/new-main-photo/{newMainPhotoId}" auth="Seller" />
+
+Sets a different product photo as the main display image.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+<ParamField path="newMainPhotoId" type="string (uuid)" required>
+  ID of the existing media item to set as main photo
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Main photo updated successfully
+- `400 Bad Request` - Photo doesn't belong to this product
+- `404 Not Found` - Product or photo not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/products/product/product-uuid/new-main-photo/photo-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/products/product/${productId}/new-main-photo/${photoId}`,
+  {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+if (response.status === 204) {
+  console.log('Main photo updated');
+}
+```
+
+```python Python
+import requests
+
+response = requests.patch(
+    f'https://your-server.com/api/products/product/{product_id}/new-main-photo/{photo_id}',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+if response.status_code == 204:
+    print('Main photo updated')
+```
+
+</CodeGroup>
+
+---
+
+## Delete Product Media (Seller)
+
+<api method="DELETE" path="/api/products/product/{productId}/media/{mediaId}" auth="Seller" />
+
+Removes a media file from a product.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+<ParamField path="mediaId" type="string (uuid)" required>
+  Media item identifier to delete
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Media deleted successfully
+- `400 Bad Request` - Cannot delete main photo or media doesn't belong to product
+- `404 Not Found` - Product or media not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/products/product/product-uuid/media/media-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/products/product/${productId}/media/${mediaId}`,
+  {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+if (response.status === 204) {
+  console.log('Media deleted');
+}
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    f'https://your-server.com/api/products/product/{product_id}/media/{media_id}',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+if response.status_code == 204:
+    print('Media deleted')
+```
+
+</CodeGroup>
+
+<Warning>
+  You cannot delete the main product photo. Set a different photo as the main photo first, then delete the old one.
+</Warning>
+
+---
+
+## Media Organization
+
+### Product Media Gallery
+
+Product media is returned with product details:
+
+```javascript
+// Fetch product with all media
+const response = await fetch(`/api/products/product/${productId}`);
+const product = await response.json();
+
+console.log('Main Photo:', product.mainPhotoUrl);
+console.log('Additional Media:', product.media);
+
+// Example media array
+/*
+[
+  {
+    "id": "media-1",
+    "url": "https://cdn.example.com/products/photo-2.jpg",
+    "type": "Image",
+    "order": 1
+  },
+  {
+    "id": "media-2",
+    "url": "https://cdn.example.com/products/photo-3.jpg",
+    "type": "Image",
+    "order": 2
+  },
+  {
+    "id": "media-3",
+    "url": "https://cdn.example.com/products/demo-video.mp4",
+    "type": "Video",
+    "order": 3
+  }
+]
+*/
+```
+
+---
+
+## Complete Media Management Flow
+
+### Managing Product Photos
+
+```javascript
+class ProductMediaManager {
+  constructor(productId, jwtToken) {
+    this.productId = productId;
+    this.token = jwtToken;
+    this.apiBase = 'https://your-server.com/api';
+  }
+
+  // Upload new photos
+  async uploadPhotos(files) {
+    const formData = new FormData();
+    formData.append('productId', this.productId);
+    
+    files.forEach(file => {
+      formData.append('media', file);
+    });
+
+    const response = await fetch(`${this.apiBase}/products/add-product-media`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: formData
+    });
+
+    if (response.status === 204) {
+      await this.refreshProductMedia();
+      return { success: true };
+    }
+    
+    return { success: false, error: 'Upload failed' };
+  }
+
+  // Set new main photo
+  async setMainPhoto(mediaId) {
+    const response = await fetch(
+      `${this.apiBase}/products/product/${this.productId}/new-main-photo/${mediaId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${this.token}`
+        }
+      }
+    );
+
+    if (response.status === 204) {
+      await this.refreshProductMedia();
+      return { success: true };
+    }
+    
+    return { success: false, error: 'Failed to update main photo' };
+  }
+
+  // Delete a photo
+  async deletePhoto(mediaId) {
+    const response = await fetch(
+      `${this.apiBase}/products/product/${this.productId}/media/${mediaId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this.token}`
+        }
+      }
+    );
+
+    if (response.status === 204) {
+      await this.refreshProductMedia();
+      return { success: true };
+    }
+    
+    const error = await response.text();
+    return { success: false, error };
+  }
+
+  // Fetch current product media
+  async refreshProductMedia() {
+    const response = await fetch(
+      `${this.apiBase}/products/product/${this.productId}`
+    );
+    
+    const product = await response.json();
+    this.currentMedia = {
+      mainPhoto: product.mainPhotoUrl,
+      additionalMedia: product.media
+    };
+    
+    return this.currentMedia;
+  }
+
+  // Replace main photo workflow
+  async replaceMainPhoto(newPhotoFile) {
+    // 1. Upload new photo
+    const uploadResult = await this.uploadPhotos([newPhotoFile]);
+    if (!uploadResult.success) {
+      return uploadResult;
+    }
+
+    // 2. Refresh to get new photo ID
+    await this.refreshProductMedia();
+    
+    // 3. Get the newly uploaded photo (last in array)
+    const newPhoto = this.currentMedia.additionalMedia[
+      this.currentMedia.additionalMedia.length - 1
+    ];
+
+    // 4. Set as main photo
+    return await this.setMainPhoto(newPhoto.id);
+  }
+}
+
+// Usage
+const mediaManager = new ProductMediaManager(productId, jwtToken);
+
+// Upload photos
+await mediaManager.uploadPhotos([file1, file2, file3]);
+
+// Change main photo
+await mediaManager.setMainPhoto(photoId);
+
+// Delete a photo
+await mediaManager.deletePhoto(mediaId);
+
+// Replace main photo with new upload
+await mediaManager.replaceMainPhoto(newPhotoFile);
+```
+
+---
+
+## Media Gallery UI Component
+
+### React Media Gallery Example
+
+```jsx
+import React, { useState, useEffect } from 'react';
+
+function ProductMediaGallery({ productId, isOwner }) {
+  const [media, setMedia] = useState([]);
+  const [mainPhoto, setMainPhoto] = useState('');
+
+  useEffect(() => {
+    loadProductMedia();
+  }, [productId]);
+
+  const loadProductMedia = async () => {
+    const response = await fetch(`/api/products/product/${productId}`);
+    const product = await response.json();
+    
+    setMainPhoto(product.mainPhotoUrl);
+    setMedia(product.media || []);
+  };
+
+  const handleSetMainPhoto = async (mediaId) => {
+    const response = await fetch(
+      `/api/products/product/${productId}/new-main-photo/${mediaId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      }
+    );
+
+    if (response.ok) {
+      await loadProductMedia();
+    }
+  };
+
+  const handleDeleteMedia = async (mediaId) => {
+    if (!confirm('Delete this media item?')) return;
+
+    const response = await fetch(
+      `/api/products/product/${productId}/media/${mediaId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      }
+    );
+
+    if (response.ok) {
+      await loadProductMedia();
+    } else {
+      const error = await response.text();
+      alert(error);
+    }
+  };
+
+  return (
+    <div className="media-gallery">
+      <div className="main-photo">
+        <img src={mainPhoto} alt="Product" />
+      </div>
+      
+      <div className="additional-media">
+        {media.map((item) => (
+          <div key={item.id} className="media-item">
+            {item.type === 'Image' ? (
+              <img src={item.url} alt="Product" />
+            ) : (
+              <video src={item.url} controls />
+            )}
+            
+            {isOwner && (
+              <div className="media-actions">
+                <button onClick={() => handleSetMainPhoto(item.id)}>
+                  Set as Main
+                </button>
+                <button onClick={() => handleDeleteMedia(item.id)}>
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default ProductMediaGallery;
+```
+
+---
+
+## Media Management Best Practices
+
+<Info>
+  **Order Matters**: The main photo is the first thing customers see. Choose your best, most representative image.
+</Info>
+
+<Info>
+  **Multiple Angles**: Show products from different angles - front, back, sides, and details.
+</Info>
+
+<Info>
+  **Context Shots**: Include images showing the product in use or with size reference.
+</Info>
+
+<Warning>
+  **Always Have a Main Photo**: Products must have at least one photo. Set a new main photo before deleting the current one.
+</Warning>
+
+### Recommended Photo Sequence
+
+1. **Main Photo**: Clean, front-facing shot with neutral background
+2. **Additional Angles**: Side, back, top views
+3. **Detail Shots**: Close-ups of important features
+4. **Context Shots**: Product in use or with scale reference
+5. **Packaging**: If applicable, show packaging and contents
+
+### Video Best Practices
+
+- Keep videos short (30-90 seconds)
+- Show product features and usage
+- Use good lighting and stable camera
+- Add captions for accessibility
+- Optimize file size (compress before upload)

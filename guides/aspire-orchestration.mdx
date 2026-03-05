@@ -1,0 +1,493 @@
+---
+title: .NET Aspire Orchestration
+description: Understanding and configuring .NET Aspire for local development
+---
+
+.NET Aspire is a cloud-ready stack for building observable, production-ready distributed applications. Wolfix.Server uses Aspire to orchestrate the API, databases, and external services during local development.
+
+## What is .NET Aspire?
+
+.NET Aspire provides:
+
+- **Service orchestration** - Start multiple services with dependencies
+- **Service discovery** - Automatic service URL resolution
+- **Telemetry** - Built-in logging, metrics, and tracing
+- **Dashboard** - Unified view of all services
+- **Health checks** - Monitor service health
+
+<Info>
+  Think of Aspire as "docker-compose for .NET" with built-in observability and service defaults.
+</Info>
+
+## Aspire Projects
+
+Wolfix.Server includes two Aspire-related projects:
+
+### Wolfix.AppHost
+
+The **orchestrator** that defines and starts all services:
+
+```csharp Wolfix.AppHost/AppHost.cs
+using DotNetEnv;
+using Wolfix.AppHost.Extensions;
+
+// Load environment variables
+LoadOptions options = new(onlyExactPath: true);
+var envKeyValues = EnvExtensions.LoadOrThrow(options);
+
+var builder = DistributedApplication.CreateBuilder(args);
+
+// Add container dependencies
+var toxicApi = builder.AddContainer("toxic-api", "iluhahr/toxic-ai-api:latest")
+    .WithHttpEndpoint(targetPort: 8000);
+
+var mongoDb = builder.AddContainer("mongodb-local", "mongo", "latest")
+    .WithEndpoint(targetPort: 27017, port: 27017, name: "mongodb", scheme: "tcp");
+
+// Add the API with dependencies
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WithEnvironment("TOXIC_API_BASE_URL", toxicApi.GetEndpoint("http"))
+    .WithCustomEnvironmentVariables(envKeyValues)
+    .WaitFor(toxicApi)
+    .WaitFor(mongoDb);
+
+builder.Build().Run();
+```
+
+### Wolfix.ServiceDefaults
+
+Shared configuration for **resilience, telemetry, and health checks**:
+
+```csharp Wolfix.ServiceDefaults/Extensions.cs
+public static IHostApplicationBuilder AddServiceDefaults(
+    this IHostApplicationBuilder builder)
+{
+    builder.ConfigureOpenTelemetry();
+    builder.AddDefaultHealthChecks();
+    builder.Services.AddServiceDiscovery();
+    builder.Services.ConfigureHttpClientDefaults(http =>
+    {
+        http.AddStandardResilienceHandler();
+        http.AddServiceDiscovery();
+    });
+    
+    return builder;
+}
+```
+
+## Running with Aspire
+
+### Start the AppHost
+
+```bash
+cd Wolfix.AppHost
+dotnet run
+```
+
+This will:
+1. Pull and start Docker containers (MongoDB, Toxic API)
+2. Start the Wolfix.API project
+3. Launch the Aspire dashboard
+4. Connect all services
+
+### Access the Dashboard
+
+Once running, navigate to the dashboard URL shown in terminal output:
+
+```
+Aspire Dashboard: http://localhost:15000
+```
+
+The dashboard provides:
+
+<CardGroup cols={2}>
+  <Card title="Resources" icon="server">
+    View all services and their status
+  </Card>
+  
+  <Card title="Console Logs" icon="terminal">
+    Real-time logs from all services
+  </Card>
+  
+  <Card title="Structured Logs" icon="list">
+    Queryable structured logging
+  </Card>
+  
+  <Card title="Traces" icon="route">
+    Distributed tracing across services
+  </Card>
+  
+  <Card title="Metrics" icon="chart-line">
+    Performance metrics and counters
+  </Card>
+  
+  <Card title="Environment" icon="cog">
+    View environment variables
+  </Card>
+</CardGroup>
+
+## Aspire Configuration
+
+### Adding Containers
+
+Add external services as containers:
+
+```csharp
+// Add Redis
+var redis = builder.AddRedis("cache")
+    .WithRedisCommander(); // Adds Redis Commander UI
+
+// Add RabbitMQ
+var rabbitmq = builder.AddRabbitMQ("messaging")
+    .WithManagementPlugin();
+
+// Add SQL Server
+var sqlserver = builder.AddSqlServer("sql")
+    .AddDatabase("wolfix");
+
+// Add custom container
+var customService = builder.AddContainer("custom", "myimage:latest")
+    .WithHttpEndpoint(targetPort: 8080, port: 9000)
+    .WithEnvironment("SETTING", "value");
+```
+
+### Environment Variables
+
+Pass environment variables to services:
+
+```csharp
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
+    .WithEnvironment("DB", "Host=localhost;Port=5432;Database=wolfix")
+    .WithEnvironment("STRIPE_KEY", builder.Configuration["STRIPE_KEY"]!);
+```
+
+### Service Dependencies
+
+Define startup order with `WaitFor`:
+
+```csharp
+var postgres = builder.AddPostgres("db");
+var redis = builder.AddRedis("cache");
+
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WaitFor(postgres)  // Start postgres first
+    .WaitFor(redis);    // Then redis
+```
+
+### Loading from .env File
+
+Wolfix.Server loads environment variables from `.env`:
+
+```csharp Wolfix.AppHost/Extensions/EnvExtensions.cs
+public static Dictionary<string, string> LoadOrThrow(LoadOptions options)
+{
+    // Load .env file
+    Env.Load(options);
+    
+    // Convert to dictionary
+    var envVars = new Dictionary<string, string>();
+    foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+    {
+        envVars[entry.Key!.ToString()!] = entry.Value!.ToString()!;
+    }
+    
+    return envVars;
+}
+```
+
+Usage:
+
+```csharp
+LoadOptions options = new(onlyExactPath: true);
+var envKeyValues = EnvExtensions.LoadOrThrow(options);
+
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WithCustomEnvironmentVariables(envKeyValues);
+```
+
+## Service Defaults
+
+The `Wolfix.ServiceDefaults` project configures common concerns:
+
+### Open Telemetry
+
+Automatic instrumentation for logging, metrics, and tracing:
+
+```csharp
+private static IHostApplicationBuilder ConfigureOpenTelemetry(
+    this IHostApplicationBuilder builder)
+{
+    builder.Logging.AddOpenTelemetry(logging =>
+    {
+        logging.IncludeFormattedMessage = true;
+        logging.IncludeScopes = true;
+    });
+
+    builder.Services.AddOpenTelemetry()
+        .WithMetrics(metrics =>
+        {
+            metrics.AddAspNetCoreInstrumentation()
+                   .AddHttpClientInstrumentation()
+                   .AddRuntimeInstrumentation();
+        })
+        .WithTracing(tracing =>
+        {
+            tracing.AddAspNetCoreInstrumentation()
+                   .AddHttpClientInstrumentation()
+                   .AddEntityFrameworkCoreInstrumentation();
+        });
+
+    builder.AddOpenTelemetryExporters();
+
+    return builder;
+}
+```
+
+### Health Checks
+
+Endpoints for monitoring service health:
+
+```csharp
+private static IHostApplicationBuilder AddDefaultHealthChecks(
+    this IHostApplicationBuilder builder)
+{
+    builder.Services.AddHealthChecks()
+        .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+
+    return builder;
+}
+```
+
+Access health checks:
+- `/health` - Overall health
+- `/health/live` - Liveness probe
+- `/health/ready` - Readiness probe
+
+### HTTP Resilience
+
+Automatic retries, timeouts, and circuit breakers:
+
+```csharp
+builder.Services.ConfigureHttpClientDefaults(http =>
+{
+    http.AddStandardResilienceHandler();
+    http.AddServiceDiscovery();
+});
+```
+
+This adds:
+- **Retry policy** - 3 retries with exponential backoff
+- **Circuit breaker** - Opens after 5 consecutive failures
+- **Timeout** - 30 second request timeout
+
+## Using Aspire in the API
+
+The API project references ServiceDefaults:
+
+```csharp Wolfix.API/Program.cs
+using Wolfix.ServiceDefaults;
+
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+// Add service defaults (telemetry, health checks, resilience)
+builder.AddServiceDefaults();
+
+// Rest of configuration...
+
+WebApplication app = builder.Build();
+
+// Map default endpoints (/health, /alive, /metrics)
+app.MapDefaultEndpoints();
+
+// Rest of middleware...
+
+app.Run();
+```
+
+## Debugging with Aspire
+
+### Debug the API
+
+1. Set breakpoints in Wolfix.API
+2. Run Wolfix.AppHost in debug mode
+3. Aspire starts all dependencies
+4. Debugger attaches to API
+
+### Debug AppHost
+
+1. Set breakpoints in AppHost.cs
+2. Run Wolfix.AppHost in debug mode
+3. Step through service orchestration
+
+### View Logs in Dashboard
+
+1. Open Aspire dashboard
+2. Navigate to "Console Logs"
+3. Select service (api, mongodb-local, toxic-api)
+4. View real-time logs
+
+### View Traces
+
+1. Open Aspire dashboard
+2. Navigate to "Traces"
+3. Select a trace to see:
+   - HTTP requests
+   - Database queries
+   - External API calls
+   - Timing information
+
+## Advanced Configuration
+
+### Custom Ports
+
+```csharp
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WithHttpEndpoint(port: 5000, targetPort: 8080, name: "http")
+    .WithHttpsEndpoint(port: 5001, targetPort: 8081, name: "https");
+```
+
+### Volume Mounts
+
+```csharp
+var mongo = builder.AddContainer("mongodb", "mongo", "latest")
+    .WithEndpoint(targetPort: 27017, port: 27017)
+    .WithBindMount("./data/mongo", "/data/db"); // Persist data
+```
+
+### Multiple Instances
+
+```csharp
+// Start multiple API instances
+for (int i = 0; i < 3; i++)
+{
+    builder.AddProject<Projects.Wolfix_API>($"api-{i}")
+        .WithHttpEndpoint(port: 5000 + i)
+        .WithReplicas(1);
+}
+```
+
+### Custom Resource
+
+```csharp
+public class CustomResource : ContainerResource
+{
+    public CustomResource(string name) : base(name)
+    {
+    }
+}
+
+public static class CustomResourceExtensions
+{
+    public static IResourceBuilder<CustomResource> AddCustomService(
+        this IDistributedApplicationBuilder builder,
+        string name)
+    {
+        var resource = new CustomResource(name);
+        return builder.AddResource(resource)
+            .WithImage("custom-image")
+            .WithHttpEndpoint(targetPort: 8080);
+    }
+}
+
+// Usage
+builder.AddCustomService("my-service");
+```
+
+## Aspire vs Docker Compose
+
+| Feature | Aspire | Docker Compose |
+|---------|--------|----------------|
+| Language | C# | YAML |
+| Type safety | ✅ Yes | ❌ No |
+| Service discovery | ✅ Built-in | ❌ Manual |
+| Telemetry | ✅ Automatic | ❌ Manual setup |
+| Dashboard | ✅ Built-in | ❌ External tools |
+| Hot reload | ✅ Yes | ❌ No |
+| .NET integration | ✅ Native | ❌ Limited |
+| Production ready | ❌ Development | ✅ Yes |
+
+<Info>
+  Aspire is designed for local development. For production, use Docker Compose, Kubernetes, or Azure Container Apps.
+</Info>
+
+## Production Deployment
+
+Aspire can generate deployment manifests:
+
+### Generate Kubernetes Manifest
+
+```bash
+cd Wolfix.AppHost
+dotnet run --publisher manifest --output-path ../deploy
+```
+
+This generates:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+      - name: api
+        image: wolfix-api:latest
+        ports:
+        - containerPort: 8080
+```
+
+### Generate Docker Compose
+
+```bash
+dotnet run --publisher compose --output-path ../deploy
+```
+
+Generates `docker-compose.yml` for production deployment.
+
+## Troubleshooting
+
+### Port Already in Use
+
+```csharp
+// Change default port
+builder.AddProject<Projects.Wolfix_API>("api")
+    .WithHttpEndpoint(port: 6000); // Use different port
+```
+
+### Container Failed to Start
+
+Check Docker is running:
+```bash
+docker ps
+```
+
+View container logs in Aspire dashboard.
+
+### Environment Variables Not Loaded
+
+Ensure `.env` file exists in AppHost directory:
+```bash
+ls -la Wolfix.AppHost/.env
+```
+
+### Dashboard Not Accessible
+
+Check firewall settings and ensure port 15000 is open:
+```bash
+netstat -an | grep 15000
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Development Guide" icon="code" href="/guides/development">
+    Start building with Aspire
+  </Card>
+  
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy to production
+  </Card>
+</CardGroup>

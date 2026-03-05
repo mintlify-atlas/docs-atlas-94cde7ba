@@ -1,0 +1,399 @@
+---
+title: 'Admin Module'
+description: 'Administrative accounts and platform management operations'
+icon: 'user-shield'
+---
+
+## Overview
+
+The **Admin** module manages administrative accounts and platform-level operations. Admins oversee seller applications, category management, and support agent creation.
+
+## Bounded Context
+
+The Admin module is responsible for:
+
+- Admin account management (Basic and Super types)
+- Admin profile information
+- Admin account lifecycle
+- Platform oversight operations
+
+<Note>
+  Admin functionality is intentionally minimal. Most admin operations are implemented in other modules (e.g., approving seller applications in Seller module, managing categories in Catalog module) with authorization restricted to Admin role.
+</Note>
+
+## Domain Layer
+
+**Location**: `Admin.Domain/`
+
+### Admin Aggregate
+
+**Root**: `Admin` entity
+
+```csharp AdminAggregate/Admin.cs
+public sealed class Admin : BaseEntity
+{
+    public Guid AccountId { get; private set; }
+    public FullName FullName { get; private set; }
+    public PhoneNumber PhoneNumber { get; private set; }
+    public AdminType Type { get; private set; } = AdminType.Basic;
+    
+    private Admin() { }
+    
+    private Admin(Guid accountId, FullName fullName, PhoneNumber phoneNumber)
+    {
+        AccountId = accountId;
+        FullName = fullName;
+        PhoneNumber = phoneNumber;
+    }
+    
+    public static Result<Admin> Create(
+        Guid accountId, string firstName, string lastName, 
+        string middleName, string phoneNumber)
+    {
+        if (accountId == Guid.Empty)
+            return Result<Admin>.Failure("Account ID cannot be empty");
+        
+        Result<FullName> fullNameResult = FullName.Create(firstName, lastName, middleName);
+        if (fullNameResult.IsFailure)
+            return Result<Admin>.Failure(fullNameResult);
+        
+        FullName fullName = fullNameResult.Value!;
+        
+        Result<PhoneNumber> phoneNumberResult = PhoneNumber.Create(phoneNumber);
+        if (phoneNumberResult.IsFailure)
+            return Result<Admin>.Failure(phoneNumberResult);
+        
+        PhoneNumber phoneNumber = phoneNumberResult.Value!;
+        
+        return Result<Admin>.Success(new Admin(accountId, fullName, phoneNumber));
+    }
+    
+    public VoidResult PromoteToSuper()
+    {
+        if (Type == AdminType.Super)
+            return VoidResult.Failure("Admin is already Super admin");
+        
+        Type = AdminType.Super;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult DemoteToBasic()
+    {
+        if (Type == AdminType.Basic)
+            return VoidResult.Failure("Admin is already Basic admin");
+        
+        Type = AdminType.Basic;
+        return VoidResult.Success();
+    }
+}
+```
+
+### Enums
+
+```csharp Enums/AdminType.cs
+public enum AdminType
+{
+    Basic,  // Standard admin permissions
+    Super   // Full platform control (can create other admins)
+}
+```
+
+### Repository Interface
+
+```csharp Interfaces/IAdminRepository.cs
+public interface IAdminRepository : IBaseRepository<Admin>
+{
+    Task<Admin?> GetByAccountIdAsync(Guid accountId, CancellationToken ct);
+    Task<IReadOnlyCollection<BasicAdminProjection>> GetAllBasicAdminsAsync(
+        CancellationToken ct);
+    Task<int> GetSuperAdminsCountAsync(CancellationToken ct);
+}
+```
+
+## Application Layer
+
+**Location**: `Admin.Application/`
+
+### Services
+
+```csharp Services/AdminService.cs
+public sealed class AdminService
+{
+    public async Task<Result<Guid>> CreateAdminAsync(
+        CreateAdminDto dto,
+        Guid creatorId,
+        CancellationToken ct)
+    {
+        // Verify creator is Super admin
+        Admin? creator = await _adminRepository.GetByIdAsync(creatorId, ct);
+        if (creator == null || creator.Type != AdminType.Super)
+            return Result<Guid>.Failure(
+                "Only Super admins can create new admins", HttpStatusCode.Forbidden);
+        
+        // Create admin entity
+        Result<Admin> createResult = Admin.Create(
+            Guid.NewGuid(), dto.FirstName, dto.LastName, 
+            dto.MiddleName, dto.PhoneNumber);
+        
+        if (createResult.IsFailure)
+            return Result<Guid>.Failure(createResult);
+        
+        Admin admin = createResult.Value!;
+        
+        await _adminRepository.AddAsync(admin, ct);
+        await _adminRepository.SaveChangesAsync(ct);
+        
+        // Publish event to Identity to create account
+        await _eventBus.PublishWithoutResultAsync(
+            new CreateAdminAccount(
+                admin.AccountId, dto.Email, dto.Password, 
+                dto.FirstName, dto.LastName, dto.MiddleName, dto.PhoneNumber), ct);
+        
+        return Result<Guid>.Success(admin.Id);
+    }
+    
+    public async Task<VoidResult> DeleteAdminAsync(
+        Guid adminId,
+        Guid deleterId,
+        CancellationToken ct)
+    {
+        // Verify deleter is Super admin
+        Admin? deleter = await _adminRepository.GetByIdAsync(deleterId, ct);
+        if (deleter == null || deleter.Type != AdminType.Super)
+            return VoidResult.Failure(
+                "Only Super admins can delete admins", HttpStatusCode.Forbidden);
+        
+        Admin? admin = await _adminRepository.GetByIdAsync(adminId, ct);
+        if (admin == null)
+            return VoidResult.Failure("Admin not found", HttpStatusCode.NotFound);
+        
+        // Prevent deleting the last Super admin
+        if (admin.Type == AdminType.Super)
+        {
+            int superAdminsCount = await _adminRepository.GetSuperAdminsCountAsync(ct);
+            if (superAdminsCount <= 1)
+                return VoidResult.Failure(
+                    "Cannot delete the last Super admin", HttpStatusCode.Conflict);
+        }
+        
+        _adminRepository.Delete(admin, ct);
+        await _adminRepository.SaveChangesAsync(ct);
+        
+        // Notify Identity to delete account
+        await _eventBus.PublishWithoutResultAsync(
+            new DeleteAdminAccount(admin.AccountId), ct);
+        
+        return VoidResult.Success();
+    }
+    
+    public async Task<VoidResult> CreateSupportAgentAsync(
+        CreateSupportDto dto,
+        CancellationToken ct)
+    {
+        // Publish event to Support module
+        await _eventBus.PublishWithoutResultAsync(
+            new CreateSupportAgent(
+                Guid.NewGuid(), dto.Email, dto.Password,
+                dto.FirstName, dto.LastName, dto.MiddleName, dto.PhoneNumber), ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+### Integration Event Handlers
+
+Admin module primarily publishes events rather than consuming them.
+
+## Infrastructure Layer
+
+**Location**: `Admin.Infrastructure/`
+
+### Repository Implementation
+
+```csharp Repositories/AdminRepository.cs
+public class AdminRepository : BaseRepository<AdminContext, Admin>, IAdminRepository
+{
+    public async Task<Admin?> GetByAccountIdAsync(Guid accountId, CancellationToken ct)
+    {
+        return await _context.Admins
+            .FirstOrDefaultAsync(a => a.AccountId == accountId, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<BasicAdminProjection>> GetAllBasicAdminsAsync(
+        CancellationToken ct)
+    {
+        return await _context.Admins
+            .AsNoTracking()
+            .Where(a => a.Type == AdminType.Basic)
+            .Select(a => new BasicAdminProjection
+            {
+                Id = a.Id,
+                FullName = a.FullName.ToString(),
+                PhoneNumber = a.PhoneNumber.Value,
+                Type = a.Type
+            })
+            .ToListAsync(ct);
+    }
+    
+    public async Task<int> GetSuperAdminsCountAsync(CancellationToken ct)
+    {
+        return await _context.Admins
+            .CountAsync(a => a.Type == AdminType.Super, ct);
+    }
+}
+```
+
+### EF Core Configuration
+
+```csharp Configurations/AdminConfiguration.cs
+public class AdminConfiguration : IEntityTypeConfiguration<Admin>
+{
+    public void Configure(EntityTypeBuilder<Admin> builder)
+    {
+        builder.HasKey(a => a.Id);
+        
+        builder.Property(a => a.AccountId).IsRequired();
+        builder.HasIndex(a => a.AccountId).IsUnique();
+        
+        builder.OwnsOne(a => a.FullName, fn =>
+        {
+            fn.Property(f => f.FirstName).HasMaxLength(100).IsRequired();
+            fn.Property(f => f.LastName).HasMaxLength(100).IsRequired();
+            fn.Property(f => f.MiddleName).HasMaxLength(100);
+        });
+        
+        builder.OwnsOne(a => a.PhoneNumber, pn =>
+        {
+            pn.Property(p => p.Value).HasMaxLength(20).IsRequired();
+        });
+        
+        builder.Property(a => a.Type)
+            .IsRequired()
+            .HasDefaultValue(AdminType.Basic);
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Admin.Endpoints/`
+
+```csharp Endpoints/AdminEndpoints.cs
+internal static class AdminEndpoints
+{
+    public static void MapAdminEndpoints(this IEndpointRouteBuilder app)
+    {
+        var adminGroup = app.MapGroup("api/admins")
+            .WithTags("Admins")
+            .RequireAuthorization("Admin");
+        
+        // Admin management (Super admin only)
+        adminGroup.MapPost("", CreateAdmin)
+            .WithSummary("Create new admin account (Super admin only)");
+        
+        adminGroup.MapDelete("{id:guid}", DeleteAdmin)
+            .WithSummary("Delete admin account (Super admin only)");
+        
+        adminGroup.MapGet("", GetAllAdmins)
+            .WithSummary("Get all admins");
+        
+        adminGroup.MapPost("{id:guid}/promote", PromoteToSuper)
+            .WithSummary("Promote admin to Super (Super admin only)");
+        
+        // Support agent management
+        adminGroup.MapPost("support", CreateSupportAgent)
+            .WithSummary("Create support agent account");
+        
+        adminGroup.MapDelete("support/{id:guid}", DeleteSupportAgent)
+            .WithSummary("Delete support agent account");
+    }
+    
+    private static async Task<Results<Ok<Guid>, BadRequest<string>, UnauthorizedHttpResult>> CreateAdmin(
+        [FromBody] CreateAdminDto dto,
+        HttpContext httpContext,
+        [FromServices] AdminService adminService,
+        CancellationToken ct)
+    {
+        var userIdClaim = httpContext.User.FindFirst("userId");
+        if (userIdClaim == null)
+            return TypedResults.Unauthorized();
+        
+        Guid creatorId = Guid.Parse(userIdClaim.Value);
+        
+        var result = await adminService.CreateAdminAsync(dto, creatorId, ct);
+        return result.IsSuccess 
+            ? TypedResults.Ok(result.Value!) 
+            : TypedResults.BadRequest(result.ErrorMessage!);
+    }
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Admin.IntegrationEvents/
+public record CreateAdminAccount(
+    Guid AccountId, string Email, string Password,
+    string FirstName, string LastName, string MiddleName, string PhoneNumber
+) : IIntegrationEvent;
+
+public record DeleteAdminAccount(Guid AccountId) : IIntegrationEvent;
+
+public record CreateSupportAgent(
+    Guid AccountId, string Email, string Password,
+    string FirstName, string LastName, string MiddleName, string PhoneNumber
+) : IIntegrationEvent;
+```
+
+### Consumed
+
+Admin module primarily publishes events to Identity and Support modules.
+
+## Authorization Model
+
+### Admin Capabilities
+
+<AccordionGroup>
+  <Accordion title="Basic Admin" icon="user-gear">
+    - Approve/reject seller applications
+    - Manage product categories (create, update, delete)
+    - Manage category attributes and variants
+    - View all orders and update delivery status
+    - Create support agent accounts
+    - View platform statistics
+  </Accordion>
+  
+  <Accordion title="Super Admin" icon="crown">
+    All Basic Admin capabilities, plus:
+    - Create new admin accounts
+    - Delete admin accounts
+    - Promote Basic admins to Super
+    - Demote Super admins to Basic
+    - Access sensitive platform configurations
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+<Warning>
+  **Super Admin Protection**: The system prevents deletion of the last Super admin to ensure platform manageability. Always maintain at least one Super admin account.
+</Warning>
+
+<Info>
+  **Admin Creation Flow**: Only Super admins can create new admin accounts. The creation process involves:
+  1. Super admin submits admin details
+  2. Admin entity created in Admin module
+  3. Integration event published to Identity module
+  4. Identity creates ASP.NET Core Identity user with Admin role
+  5. JWT token generated for new admin
+</Info>
+
+## Related Modules
+
+- **Identity** - Admin accounts and authentication
+- **Support** - Admins create support agent accounts
+- **Seller** - Admins approve/reject seller applications
+- **Catalog** - Admins manage categories
+- **Order** - Admins update order delivery status

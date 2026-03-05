@@ -1,0 +1,550 @@
+---
+title: 'Media Module'
+description: 'Blob storage management for photos and videos using Azure'
+icon: 'image'
+---
+
+## Overview
+
+The **Media** module manages file uploads and storage using Azure Blob Storage. It handles photos and videos for products, categories, and user profiles.
+
+## Bounded Context
+
+The Media module is responsible for:
+
+- Blob resource creation and deletion
+- Azure Blob Storage integration
+- Image and video upload/download
+- Media URL generation
+- Media type validation
+- Cleanup of orphaned media files
+
+## Domain Layer
+
+**Location**: `Media.Domain/`
+
+### BlobResource Aggregate
+
+**Root**: `BlobResource` entity
+
+```csharp BlobAggregate/BlobResource.cs
+public sealed class BlobResource : BaseEntity
+{
+    public string Name { get; private set; }
+    public string Url { get; private set; } = string.Empty;
+    public BlobResourceType Type { get; private set; }
+    
+    private BlobResource() { }
+    
+    private BlobResource(string name, BlobResourceType type)
+    {
+        Name = name;
+        Type = type;
+    }
+    
+    public static Result<BlobResource> Create(string type)
+    {
+        if (!Enum.TryParse(type, out BlobResourceType blobResourceType))
+            return Result<BlobResource>.Failure("Invalid blob resource type");
+        
+        // Generate unique name with type suffix
+        var name = $"{Guid.NewGuid():N}-{type.ToLowerInvariant()}";
+        
+        BlobResource blobResource = new(name, blobResourceType);
+        return Result<BlobResource>.Success(blobResource);
+    }
+    
+    public static Result<BlobResource> Create(BlobResourceType type)
+    {
+        if (!Enum.IsDefined(type))
+            return Result<BlobResource>.Failure("Invalid blob resource type");
+        
+        var name = $"{Guid.NewGuid():N}-{type.ToString().ToLowerInvariant()}";
+        
+        BlobResource blobResource = new(name, type);
+        return Result<BlobResource>.Success(blobResource);
+    }
+    
+    public VoidResult ChangeName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return VoidResult.Failure("Name is required");
+        
+        Name = name;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult ChangeUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return VoidResult.Failure("URL is required");
+        
+        Url = url;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult ChangeType(string type)
+    {
+        if (!Enum.TryParse(type, out BlobResourceType blobResourceType))
+            return VoidResult.Failure("Invalid blob resource type");
+        
+        Type = blobResourceType;
+        return VoidResult.Success();
+    }
+}
+```
+
+**Enums** (from Shared.Domain):
+
+```csharp Shared.Domain/Enums/BlobResourceType.cs
+public enum BlobResourceType
+{
+    Photo,
+    Video
+}
+```
+
+### Repository Interfaces
+
+<CodeGroup>
+
+```csharp Interfaces/IBlobResourceRepository.cs
+public interface IBlobResourceRepository : IBaseRepository<BlobResource>
+{
+    Task<BlobResource?> GetByNameAsync(string name, CancellationToken ct);
+    Task<IReadOnlyCollection<BlobResource>> GetByTypeAsync(
+        BlobResourceType type, CancellationToken ct);
+}
+```
+
+```csharp Interfaces/IAzureBlobRepository.cs
+public interface IAzureBlobRepository
+{
+    Task<string> UploadAsync(
+        string containerName, 
+        string blobName, 
+        Stream content, 
+        string contentType,
+        CancellationToken ct);
+    
+    Task<Stream> DownloadAsync(
+        string containerName, 
+        string blobName, 
+        CancellationToken ct);
+    
+    Task DeleteAsync(
+        string containerName, 
+        string blobName, 
+        CancellationToken ct);
+    
+    Task<bool> ExistsAsync(
+        string containerName, 
+        string blobName, 
+        CancellationToken ct);
+    
+    string GetBlobUrl(string containerName, string blobName);
+}
+```
+
+</CodeGroup>
+
+## Application Layer
+
+**Location**: `Media.Application/`
+
+### Services
+
+```csharp Services/MediaService.cs
+public sealed class MediaService
+{
+    private const string ContainerName = "wolfix-media";
+    private readonly string[] AllowedPhotoExtensions = { ".jpg", ".jpeg", ".png", ".webp" };
+    private readonly string[] AllowedVideoExtensions = { ".mp4", ".mov", ".avi" };
+    private const long MaxPhotoSize = 5 * 1024 * 1024;  // 5 MB
+    private const long MaxVideoSize = 50 * 1024 * 1024; // 50 MB
+    
+    public async Task<Result<CreatedMediaDto>> UploadPhotoAsync(
+        IFormFile file,
+        CancellationToken ct)
+    {
+        // Validate file
+        VoidResult validationResult = ValidatePhoto(file);
+        if (validationResult.IsFailure)
+            return Result<CreatedMediaDto>.Failure(validationResult);
+        
+        // Create blob resource
+        Result<BlobResource> createResult = BlobResource.Create(BlobResourceType.Photo);
+        if (createResult.IsFailure)
+            return Result<CreatedMediaDto>.Failure(createResult);
+        
+        BlobResource blobResource = createResult.Value!;
+        
+        // Upload to Azure Blob Storage
+        string url;
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            url = await _azureBlobRepository.UploadAsync(
+                ContainerName, 
+                blobResource.Name, 
+                stream, 
+                file.ContentType,
+                ct);
+        }
+        catch (Exception ex)
+        {
+            return Result<CreatedMediaDto>.Failure(
+                $"Failed to upload file: {ex.Message}", 
+                HttpStatusCode.InternalServerError);
+        }
+        
+        // Save blob resource with URL
+        blobResource.ChangeUrl(url);
+        await _blobResourceRepository.AddAsync(blobResource, ct);
+        await _blobResourceRepository.SaveChangesAsync(ct);
+        
+        var dto = new CreatedMediaDto
+        {
+            Id = blobResource.Id,
+            Url = blobResource.Url,
+            Type = blobResource.Type
+        };
+        
+        return Result<CreatedMediaDto>.Success(dto);
+    }
+    
+    public async Task<Result<CreatedMediaDto>> UploadVideoAsync(
+        IFormFile file,
+        CancellationToken ct)
+    {
+        // Similar to UploadPhotoAsync but with video validation
+        VoidResult validationResult = ValidateVideo(file);
+        if (validationResult.IsFailure)
+            return Result<CreatedMediaDto>.Failure(validationResult);
+        
+        Result<BlobResource> createResult = BlobResource.Create(BlobResourceType.Video);
+        // ... rest of upload logic
+    }
+    
+    public async Task<VoidResult> DeleteMediaAsync(
+        Guid mediaId,
+        CancellationToken ct)
+    {
+        BlobResource? blobResource = await _blobResourceRepository
+            .GetByIdAsync(mediaId, ct);
+        if (blobResource == null)
+            return VoidResult.Failure("Media not found", HttpStatusCode.NotFound);
+        
+        // Delete from Azure Blob Storage
+        try
+        {
+            await _azureBlobRepository.DeleteAsync(
+                ContainerName, 
+                blobResource.Name, 
+                ct);
+        }
+        catch (Exception ex)
+        {
+            return VoidResult.Failure(
+                $"Failed to delete blob: {ex.Message}", 
+                HttpStatusCode.InternalServerError);
+        }
+        
+        // Delete from database
+        _blobResourceRepository.Delete(blobResource, ct);
+        await _blobResourceRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+    
+    private VoidResult ValidatePhoto(IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+            return VoidResult.Failure("File is required");
+        
+        if (file.Length > MaxPhotoSize)
+            return VoidResult.Failure("Photo size exceeds 5 MB limit");
+        
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!AllowedPhotoExtensions.Contains(extension))
+            return VoidResult.Failure(
+                $"Invalid file type. Allowed: {string.Join(", ", AllowedPhotoExtensions)}");
+        
+        return VoidResult.Success();
+    }
+    
+    private VoidResult ValidateVideo(IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+            return VoidResult.Failure("File is required");
+        
+        if (file.Length > MaxVideoSize)
+            return VoidResult.Failure("Video size exceeds 50 MB limit");
+        
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!AllowedVideoExtensions.Contains(extension))
+            return VoidResult.Failure(
+                $"Invalid file type. Allowed: {string.Join(", ", AllowedVideoExtensions)}");
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+### Integration Event Handlers
+
+```csharp EventHandlers/DeleteProductMediaHandler.cs
+public class DeleteProductMediaHandler : 
+    IIntegrationEventHandler<DeleteProductMedia>
+{
+    public async Task<VoidResult> HandleAsync(
+        DeleteProductMedia @event, 
+        CancellationToken ct)
+    {
+        return await _mediaService.DeleteMediaAsync(@event.MediaId, ct);
+    }
+}
+```
+
+```csharp EventHandlers/UploadCategoryPhotoHandler.cs
+public class UploadCategoryPhotoHandler : 
+    IIntegrationEventHandler<AddPhotoForNewCategory>
+{
+    public async Task<VoidResult> HandleAsync(
+        AddPhotoForNewCategory @event, 
+        CancellationToken ct)
+    {
+        // This handler is triggered after category creation
+        // to inform Catalog module of the uploaded photo URL
+        BlobResource? blobResource = await _blobResourceRepository
+            .GetByIdAsync(@event.BlobResourceId, ct);
+        
+        if (blobResource == null)
+            return VoidResult.Failure("Blob resource not found");
+        
+        // Notify Catalog module with the URL
+        await _eventBus.PublishWithoutResultAsync(
+            new CategoryPhotoUploaded(@event.CategoryId, blobResource.Url), ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Infrastructure Layer
+
+**Location**: `Media.Infrastructure/`
+
+### Azure Blob Repository Implementation
+
+```csharp Repositories/AzureBlobRepository.cs
+public class AzureBlobRepository : IAzureBlobRepository
+{
+    private readonly BlobServiceClient _blobServiceClient;
+    
+    public AzureBlobRepository(IConfiguration configuration)
+    {
+        string connectionString = configuration["Azure:BlobStorage:ConnectionString"]!;
+        _blobServiceClient = new BlobServiceClient(connectionString);
+    }
+    
+    public async Task<string> UploadAsync(
+        string containerName, 
+        string blobName, 
+        Stream content, 
+        string contentType,
+        CancellationToken ct)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        await containerClient.CreateIfNotExistsAsync(cancellationToken: ct);
+        
+        var blobClient = containerClient.GetBlobClient(blobName);
+        
+        var options = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders
+            {
+                ContentType = contentType
+            }
+        };
+        
+        await blobClient.UploadAsync(content, options, ct);
+        
+        return blobClient.Uri.ToString();
+    }
+    
+    public async Task<Stream> DownloadAsync(
+        string containerName, 
+        string blobName, 
+        CancellationToken ct)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        var blobClient = containerClient.GetBlobClient(blobName);
+        
+        var response = await blobClient.DownloadStreamingAsync(cancellationToken: ct);
+        return response.Value.Content;
+    }
+    
+    public async Task DeleteAsync(
+        string containerName, 
+        string blobName, 
+        CancellationToken ct)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        var blobClient = containerClient.GetBlobClient(blobName);
+        
+        await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+    }
+    
+    public async Task<bool> ExistsAsync(
+        string containerName, 
+        string blobName, 
+        CancellationToken ct)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        var blobClient = containerClient.GetBlobClient(blobName);
+        
+        return await blobClient.ExistsAsync(ct);
+    }
+    
+    public string GetBlobUrl(string containerName, string blobName)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        var blobClient = containerClient.GetBlobClient(blobName);
+        return blobClient.Uri.ToString();
+    }
+}
+```
+
+### Repository Implementation
+
+```csharp Repositories/BlobResourceRepository.cs
+public class BlobResourceRepository : 
+    BaseRepository<MediaContext, BlobResource>, IBlobResourceRepository
+{
+    public async Task<BlobResource?> GetByNameAsync(string name, CancellationToken ct)
+    {
+        return await _context.BlobResources
+            .FirstOrDefaultAsync(br => br.Name == name, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<BlobResource>> GetByTypeAsync(
+        BlobResourceType type, 
+        CancellationToken ct)
+    {
+        return await _context.BlobResources
+            .Where(br => br.Type == type)
+            .ToListAsync(ct);
+    }
+}
+```
+
+### EF Core Configuration
+
+```csharp Configurations/BlobResourceConfiguration.cs
+public class BlobResourceConfiguration : IEntityTypeConfiguration<BlobResource>
+{
+    public void Configure(EntityTypeBuilder<BlobResource> builder)
+    {
+        builder.HasKey(br => br.Id);
+        
+        builder.Property(br => br.Name).IsRequired().HasMaxLength(500);
+        builder.HasIndex(br => br.Name).IsUnique();
+        
+        builder.Property(br => br.Url).HasMaxLength(1000);
+        builder.Property(br => br.Type).IsRequired();
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Media.Endpoints/`
+
+```csharp Endpoints/MediaEndpoints.cs
+internal static class MediaEndpoints
+{
+    public static void MapMediaEndpoints(this IEndpointRouteBuilder app)
+    {
+        var mediaGroup = app.MapGroup("api/media")
+            .WithTags("Media")
+            .DisableAntiforgery();  // For file uploads
+        
+        mediaGroup.MapPost("upload/photo", UploadPhoto)
+            .RequireAuthorization()
+            .Accepts<IFormFile>("multipart/form-data")
+            .WithSummary("Upload a photo");
+        
+        mediaGroup.MapPost("upload/video", UploadVideo)
+            .RequireAuthorization()
+            .Accepts<IFormFile>("multipart/form-data")
+            .WithSummary("Upload a video");
+        
+        mediaGroup.MapDelete("{id:guid}", DeleteMedia)
+            .RequireAuthorization()
+            .WithSummary("Delete media file");
+        
+        mediaGroup.MapGet("{id:guid}", GetMedia)
+            .WithSummary("Get media information");
+    }
+    
+    private static async Task<Results<Ok<CreatedMediaDto>, BadRequest<string>>> UploadPhoto(
+        IFormFile file,
+        [FromServices] MediaService mediaService,
+        CancellationToken ct)
+    {
+        var result = await mediaService.UploadPhotoAsync(file, ct);
+        return result.IsSuccess 
+            ? TypedResults.Ok(result.Value!) 
+            : TypedResults.BadRequest(result.ErrorMessage!);
+    }
+}
+```
+
+## Configuration
+
+### Azure Blob Storage
+
+```json appsettings.json
+{
+  "Azure": {
+    "BlobStorage": {
+      "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=..."
+    }
+  }
+}
+```
+
+### Dependency Injection
+
+```csharp Extensions/DependencyInjection.cs
+public static IServiceCollection AddMediaInfrastructure(
+    this IServiceCollection services,
+    IConfiguration configuration)
+{
+    services.AddSingleton<IAzureBlobRepository, AzureBlobRepository>();
+    services.AddScoped<IBlobResourceRepository, BlobResourceRepository>();
+    
+    return services;
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Media.IntegrationEvents/
+public record CategoryPhotoUploaded(Guid CategoryId, string PhotoUrl) : IIntegrationEvent;
+public record ProductMediaUploaded(Guid ProductId, Guid MediaId, string MediaUrl) : IIntegrationEvent;
+```
+
+### Consumed
+
+- `DeleteProductMedia` - From Catalog module
+- `AddPhotoForNewCategory` - From Catalog module
+
+## Related Modules
+
+- **Catalog** - Product and category media
+- **Customer** - Customer profile photos
+- **Seller** - Seller profile photos

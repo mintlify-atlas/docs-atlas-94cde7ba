@@ -1,0 +1,252 @@
+---
+title: 'Modular Architecture Overview'
+description: 'Understanding Wolfix.Server modular monolith architecture and inter-module communication'
+icon: 'grid-2'
+---
+
+## Architecture Philosophy
+
+Wolfix.Server is built as a **modular monolith** - a single deployable application composed of loosely coupled, highly cohesive modules. Each module represents a bounded context in the domain and follows Clean Architecture principles.
+
+## Core Principles
+
+<CardGroup cols={2}>
+  <Card title="Bounded Contexts" icon="border-all">
+    Each module encapsulates a specific business domain with clear boundaries
+  </Card>
+  <Card title="Explicit Dependencies" icon="link">
+    Modules communicate through well-defined integration events, not direct references
+  </Card>
+  <Card title="Layered Design" icon="layer-group">
+    Every module follows the same layer structure: Domain, Application, Infrastructure, Endpoints
+  </Card>
+  <Card title="Shared Kernel" icon="share-nodes">
+    Common abstractions, value objects, and base classes live in Shared modules
+  </Card>
+</CardGroup>
+
+## Module Structure
+
+Each business module follows a consistent 4-layer architecture:
+
+```
+{ModuleName}.Domain/          # Pure business logic & entities
+├── {Aggregate}Aggregate/
+│   ├── {Entity}.cs
+│   ├── Entities/
+│   ├── ValueObjects/
+│   └── Enums/
+├── Interfaces/               # Repository contracts
+├── Projections/              # Read models
+└── Services/                 # Domain services
+
+{ModuleName}.Application/     # Use cases & orchestration
+├── Services/
+├── Dto/
+├── Mapping/
+└── EventHandlers/            # Integration event handlers
+
+{ModuleName}.Infrastructure/  # Data access & external concerns
+├── Repositories/
+├── Configurations/           # EF Core configs
+└── Contexts/
+
+{ModuleName}.Endpoints/       # HTTP API endpoints
+└── Endpoints/
+
+{ModuleName}.IntegrationEvents/  # Cross-module contracts
+```
+
+## Available Modules
+
+### Business Modules
+
+<AccordionGroup>
+  <Accordion title="Identity" icon="fingerprint">
+    Authentication, authorization, and user account management. Handles registration, login, JWT tokens, and role management.
+  </Accordion>
+  
+  <Accordion title="Catalog" icon="boxes-stacked">
+    Product catalog, categories, variants, attributes, reviews, and discounts. Central to the e-commerce domain.
+  </Accordion>
+  
+  <Accordion title="Order" icon="cart-shopping">
+    Order processing, delivery methods, payment tracking, and order lifecycle management.
+  </Accordion>
+  
+  <Accordion title="Customer" icon="user">
+    Customer profiles, shopping carts, favorites, bonuses, and violation tracking.
+  </Accordion>
+  
+  <Accordion title="Seller" icon="store">
+    Seller accounts, seller applications, categories, and seller-specific operations.
+  </Accordion>
+  
+  <Accordion title="Media" icon="image">
+    Blob storage management for photos and videos using Azure Blob Storage.
+  </Accordion>
+  
+  <Accordion title="Support" icon="headset">
+    Support tickets, requests categorization (bugs, orders, general), and support agent management.
+  </Accordion>
+  
+  <Accordion title="Admin" icon="user-shield">
+    Administrative accounts and operations (Basic and Super admin types).
+  </Accordion>
+</AccordionGroup>
+
+## Inter-Module Communication
+
+Modules communicate exclusively through **Integration Events** to maintain loose coupling.
+
+### EventBus Pattern
+
+The `EventBus` class (located in `Shared.IntegrationEvents`) orchestrates event publishing and handling:
+
+```csharp Shared.IntegrationEvents/EventBus.cs
+public sealed class EventBus(IServiceScopeFactory serviceProvider)
+{
+    public async Task<VoidResult> PublishWithoutResultAsync<TEvent>(TEvent @event, CancellationToken ct) 
+        where TEvent : IIntegrationEvent
+    {
+        await using var scope = serviceProvider.CreateAsyncScope();
+        
+        var handlers = scope.ServiceProvider
+            .GetServices<IIntegrationEventHandler<TEvent>>()
+            .ToList();
+
+        foreach (var handler in handlers)
+        {
+            VoidResult result = await handler.HandleAsync(@event, ct);
+            if (result.IsFailure) return result;
+        }
+        
+        return VoidResult.Success();
+    }
+
+    public async Task<Result<TResult>> PublishWithSingleResultAsync<TEvent, TResult>(TEvent @event,
+        CancellationToken ct) where TEvent : IIntegrationEvent
+    {
+        await using var scope = serviceProvider.CreateAsyncScope();
+        var handler = scope.ServiceProvider
+            .GetRequiredService<IIntegrationEventHandler<TEvent, TResult>>();
+        return await handler.HandleAsync(@event, ct);
+    }
+}
+```
+
+### Integration Event Examples
+
+<CodeGroup>
+
+```csharp Catalog → Identity
+// Verify seller exists before adding product
+public record CheckSellerExistsForProductAddition(Guid SellerId) : IIntegrationEvent;
+
+// Handler in Identity.Application
+public class CheckSellerExistsHandler : 
+    IIntegrationEventHandler<CheckSellerExistsForProductAddition, bool>
+{
+    public async Task<Result<bool>> HandleAsync(
+        CheckSellerExistsForProductAddition @event, 
+        CancellationToken ct)
+    {
+        bool exists = await _sellerRepository.IsExistAsync(@event.SellerId, ct);
+        return Result<bool>.Success(exists);
+    }
+}
+```
+
+```csharp Catalog → Media
+// Delete product media from blob storage
+public record DeleteProductMedia(Guid MediaId) : IIntegrationEvent;
+
+// Handler in Media.Application
+public class DeleteProductMediaHandler : 
+    IIntegrationEventHandler<DeleteProductMedia>
+{
+    public async Task<VoidResult> HandleAsync(
+        DeleteProductMedia @event, 
+        CancellationToken ct)
+    {
+        await _blobRepository.DeleteAsync(@event.MediaId, ct);
+        return VoidResult.Success();
+    }
+}
+```
+
+```csharp Customer → Catalog
+// Check product exists when adding to cart
+public record ProductExistsForAddingToCart(Guid ProductId) : IIntegrationEvent;
+```
+
+</CodeGroup>
+
+## Key Design Patterns
+
+### Result Pattern
+
+All operations return `Result<T>` or `VoidResult` to handle errors functionally:
+
+```csharp Shared.Domain/Models/Result.cs
+public sealed class Result<TValue>
+{
+    public TValue? Value { get; }
+    public string? ErrorMessage { get; }
+    public bool IsSuccess => ErrorMessage == null;
+    public bool IsFailure => !IsSuccess;
+    public HttpStatusCode StatusCode { get; }
+
+    public static Result<TValue> Success(TValue value, HttpStatusCode statusCode = HttpStatusCode.OK)
+        => new(value, statusCode);
+
+    public static Result<TValue> Failure(string errorMessage, HttpStatusCode statusCode = HttpStatusCode.BadRequest)
+        => new(errorMessage, statusCode);
+}
+```
+
+### Aggregate Pattern
+
+Domain entities are organized into aggregates with a single root entity that enforces invariants:
+
+- **ProductAggregate**: Product (root), ProductMedia, Review, Discount
+- **OrderAggregate**: Order (root), OrderItem
+- **CustomerAggregate**: Customer (root), CartItem, FavoriteItem
+- **CategoryAggregate**: Category (root), ProductAttribute, ProductVariant
+
+### Repository Pattern
+
+Data access is abstracted through repository interfaces defined in the Domain layer:
+
+```csharp
+public interface IProductRepository : IBaseRepository<Product>
+{
+    Task<Product?> GetByIdWithMediaAsync(Guid id, CancellationToken ct);
+    Task<IReadOnlyCollection<ProductShortProjection>> GetByCategoryAsync(Guid categoryId, CancellationToken ct);
+}
+```
+
+## Benefits of This Architecture
+
+<CardGroup cols={2}>
+  <Card title="Maintainability" icon="wrench">
+    Clear separation of concerns makes code easier to understand and modify
+  </Card>
+  <Card title="Testability" icon="vial">
+    Pure domain logic with no infrastructure dependencies
+  </Card>
+  <Card title="Scalability" icon="chart-line">
+    Modules can be extracted into microservices if needed
+  </Card>
+  <Card title="Team Autonomy" icon="users">
+    Teams can work on different modules with minimal conflicts
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+Explore individual module documentation to understand:
+- Domain entities and aggregates
+- Use cases and application services
+- Infrastructure implementations
+- API endpoints and contracts

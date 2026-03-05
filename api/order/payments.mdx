@@ -1,0 +1,364 @@
+---
+title: 'Payments'
+description: 'Handle order payments and payment processing'
+---
+
+## Payment Overview
+
+Wolfix.Server integrates with payment providers (such as Stripe) to process online payments securely. The API provides endpoints for initiating payments and confirming payment status.
+
+## Payment Flow
+
+<Steps>
+  <Step title="Create Order with Payment">
+    Call `/api/orders/with-payment` to create an order and receive a payment client secret
+  </Step>
+  <Step title="Process Payment on Client">
+    Use the client secret with your payment provider's SDK to collect payment details
+  </Step>
+  <Step title="Payment Provider Processes">
+    Payment provider (e.g., Stripe) processes the payment
+  </Step>
+  <Step title="Confirm Payment">
+    Call `/api/orders/{orderId}/paid` to mark the order as paid in the system
+  </Step>
+  <Step title="Order Fulfillment">
+    Order proceeds to fulfillment once payment is confirmed
+  </Step>
+</Steps>
+
+---
+
+## Create Order with Payment
+
+See [Create Order](/api/order/create-order#place-order-with-payment-customer) for detailed documentation.
+
+**Endpoint:** `POST /api/orders/with-payment`
+
+**Returns:**
+```json
+{
+  "orderId": "order-uuid",
+  "clientSecret": "pi_1234567890_secret_abcdefghijklmnop",
+  "totalAmount": 459.98
+}
+```
+
+---
+
+## Confirm Payment
+
+See [Create Order](/api/order/create-order#mark-order-as-paid-customer) for detailed documentation.
+
+**Endpoint:** `PATCH /api/orders/{orderId}/paid`
+
+---
+
+## Payment Integration Example (Stripe)
+
+### Complete Payment Flow with Stripe
+
+```javascript
+import { loadStripe } from '@stripe/stripe-js';
+
+// Initialize Stripe
+const stripe = await loadStripe('pk_test_your_publishable_key');
+
+// 1. Create order and get client secret
+async function createOrderWithPayment(orderData) {
+  const response = await fetch('https://your-server.com/api/orders/with-payment', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(orderData)
+  });
+  
+  const data = await response.json();
+  return data; // { orderId, clientSecret, totalAmount }
+}
+
+// 2. Process payment with Stripe
+async function processPayment(clientSecret, cardElement) {
+  const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+    payment_method: {
+      card: cardElement,
+      billing_details: {
+        name: 'Customer Name',
+        email: 'customer@example.com'
+      }
+    }
+  });
+  
+  if (error) {
+    console.error('Payment failed:', error.message);
+    return { success: false, error: error.message };
+  }
+  
+  if (paymentIntent.status === 'succeeded') {
+    return { success: true, paymentIntent };
+  }
+  
+  return { success: false, error: 'Payment not completed' };
+}
+
+// 3. Confirm payment in your system
+async function confirmOrderPayment(orderId) {
+  const response = await fetch(
+    `https://your-server.com/api/orders/${orderId}/paid`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${jwtToken}`
+      }
+    }
+  );
+  
+  return response.status === 204;
+}
+
+// Complete checkout flow
+async function checkout(orderData, cardElement) {
+  try {
+    // Step 1: Create order
+    const { orderId, clientSecret, totalAmount } = await createOrderWithPayment(orderData);
+    console.log(`Order created: ${orderId}, Total: $${totalAmount}`);
+    
+    // Step 2: Process payment
+    const paymentResult = await processPayment(clientSecret, cardElement);
+    
+    if (!paymentResult.success) {
+      throw new Error(paymentResult.error);
+    }
+    
+    console.log('Payment successful!');
+    
+    // Step 3: Confirm in system
+    const confirmed = await confirmOrderPayment(orderId);
+    
+    if (confirmed) {
+      console.log('Order payment confirmed!');
+      // Redirect to order confirmation page
+      window.location.href = `/orders/${orderId}/confirmation`;
+    }
+  } catch (error) {
+    console.error('Checkout failed:', error);
+    // Show error to user
+  }
+}
+```
+
+---
+
+## Payment Methods Supported
+
+Depending on your payment provider configuration, you can accept:
+
+### Credit/Debit Cards
+- Visa
+- Mastercard
+- American Express
+- Discover
+- And other major card networks
+
+### Digital Wallets
+- Apple Pay
+- Google Pay
+- Link (Stripe)
+
+### Other Methods
+- Bank transfers
+- Cash on Delivery (use `/api/orders` endpoint instead)
+
+---
+
+## Payment Status
+
+Orders can have the following payment statuses:
+
+- **Pending** - Payment not yet initiated or processing
+- **Paid** - Payment successfully completed
+- **Failed** - Payment attempt failed
+- **Refunded** - Payment has been refunded to customer
+
+---
+
+## Error Handling
+
+### Common Payment Errors
+
+**Insufficient Funds:**
+```javascript
+if (error.code === 'insufficient_funds') {
+  showError('Your card has insufficient funds');
+}
+```
+
+**Card Declined:**
+```javascript
+if (error.code === 'card_declined') {
+  showError('Your card was declined. Please try another payment method.');
+}
+```
+
+**Expired Card:**
+```javascript
+if (error.code === 'expired_card') {
+  showError('Your card has expired. Please use a different card.');
+}
+```
+
+**Network Error:**
+```javascript
+if (error.type === 'api_connection_error') {
+  showError('Network error. Please check your connection and try again.');
+}
+```
+
+### Error Handling Example
+
+```javascript
+try {
+  const result = await stripe.confirmCardPayment(clientSecret, {...});
+  
+  if (result.error) {
+    switch (result.error.code) {
+      case 'card_declined':
+        showError('Card declined. Try another card.');
+        break;
+      case 'insufficient_funds':
+        showError('Insufficient funds.');
+        break;
+      case 'expired_card':
+        showError('Card expired.');
+        break;
+      default:
+        showError(result.error.message);
+    }
+  } else if (result.paymentIntent.status === 'succeeded') {
+    await confirmOrderPayment(orderId);
+    showSuccess('Payment successful!');
+  }
+} catch (error) {
+  console.error('Payment error:', error);
+  showError('An unexpected error occurred.');
+}
+```
+
+---
+
+## Security Best Practices
+
+<Warning>
+  **Never store credit card details** on your server or in your database. Always use your payment provider's secure token-based system.
+</Warning>
+
+<Info>
+  The client secret is one-time use and expires after successful payment or a set period. Never reuse client secrets.
+</Info>
+
+### PCI Compliance
+
+By using payment providers like Stripe with their client-side SDKs:
+- Card details never touch your server
+- PCI compliance is handled by the payment provider
+- Your application remains PCI DSS SAQ A compliant
+
+### HTTPS Required
+
+<Warning>
+  Always use HTTPS in production when handling payments. Most payment providers will reject requests from non-HTTPS origins.
+</Warning>
+
+---
+
+## Testing Payments
+
+### Test Card Numbers (Stripe)
+
+Use these test cards in development:
+
+**Successful Payment:**
+```
+Card Number: 4242 4242 4242 4242
+Exp: Any future date
+CVC: Any 3 digits
+ZIP: Any 5 digits
+```
+
+**Declined Payment:**
+```
+Card Number: 4000 0000 0000 0002
+```
+
+**Insufficient Funds:**
+```
+Card Number: 4000 0000 0000 9995
+```
+
+**Expired Card:**
+```
+Card Number: 4000 0000 0000 0069
+```
+
+See your payment provider's documentation for more test scenarios.
+
+---
+
+## Webhooks (Advanced)
+
+For production systems, implement payment webhooks to handle:
+
+- Payment confirmation
+- Failed payments
+- Refunds
+- Disputes/chargebacks
+
+Example webhook endpoint:
+
+```javascript
+app.post('/webhooks/stripe', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  
+  try {
+    const event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      webhookSecret
+    );
+    
+    switch (event.type) {
+      case 'payment_intent.succeeded':
+        const paymentIntent = event.data.object;
+        // Update order status
+        await markOrderAsPaid(paymentIntent.metadata.orderId);
+        break;
+        
+      case 'payment_intent.payment_failed':
+        // Handle failed payment
+        await handleFailedPayment(event.data.object);
+        break;
+    }
+    
+    res.json({ received: true });
+  } catch (err) {
+    res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+});
+```
+
+---
+
+## Refunds
+
+Refunds are typically processed through your payment provider's dashboard or API. After processing a refund:
+
+1. Update the order's payment status to "Refunded"
+2. Update the order status to "Cancelled" or "Refunded"
+3. Notify the customer
+4. Restore product inventory if applicable
+
+<Info>
+  Refund processing time varies by payment method and provider, typically 5-10 business days.
+</Info>

@@ -1,0 +1,632 @@
+---
+title: Google OAuth Integration
+description: Authenticate users with Google in the Identity module
+---
+
+Wolfix.Server supports **Google OAuth** authentication, allowing users to sign in with their Google accounts in the Identity module.
+
+## Overview
+
+Google OAuth provides:
+
+- **One-click registration** - Users sign up without creating passwords
+- **Verified emails** - Google provides verified email addresses
+- **User profile data** - Get name and profile picture
+- **Secure authentication** - Leverage Google's security infrastructure
+
+## Google Cloud Setup
+
+<Steps>
+  <Step title="Create Google Cloud Project">
+    1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+    2. Create a new project or select existing
+    3. Note the Project ID
+  </Step>
+
+  <Step title="Enable Google+ API">
+    1. Navigate to "APIs & Services" > "Library"
+    2. Search for "Google+ API"
+    3. Click "Enable"
+  </Step>
+
+  <Step title="Configure OAuth Consent Screen">
+    1. Go to "APIs & Services" > "OAuth consent screen"
+    2. Select "External" user type
+    3. Fill in:
+       - App name: "Wolfix"
+       - User support email: your email
+       - Developer contact: your email
+    4. Add scopes:
+       - `email`
+       - `profile`
+       - `openid`
+    5. Add test users (for development)
+    6. Save and continue
+  </Step>
+
+  <Step title="Create OAuth 2.0 Credentials">
+    1. Go to "APIs & Services" > "Credentials"
+    2. Click "Create Credentials" > "OAuth client ID"
+    3. Select "Web application"
+    4. Add authorized JavaScript origins:
+       - `http://localhost:3000` (development)
+       - `https://yourdomain.com` (production)
+    5. Add authorized redirect URIs:
+       - `http://localhost:3000/auth/callback` (development)
+       - `https://yourdomain.com/auth/callback` (production)
+    6. Click "Create"
+    7. Copy Client ID
+  </Step>
+</Steps>
+
+## Configuration
+
+### Environment Variables
+
+Add to `.env` file:
+
+```bash .env
+# Google OAuth
+GOOGLE_PASSWORD=your-secure-random-password
+```
+
+<Note>
+  `GOOGLE_PASSWORD` is used internally to create accounts for Google users. It should be a secure random string that users never see.
+</Note>
+
+### Module Registration
+
+Google OAuth is configured in the Identity module:
+
+```csharp Wolfix.API/Extensions/WebApplicationBuilderExtension.cs
+private static WebApplicationBuilder AddIdentityModule(
+    this WebApplicationBuilder builder, 
+    string connectionString)
+{
+    string tokenIssuer = builder.Configuration.GetOrThrow("TOKEN_ISSUER");
+    string tokenAudience = builder.Configuration.GetOrThrow("TOKEN_AUDIENCE");
+    string tokenKey = builder.Configuration.GetOrThrow("TOKEN_KEY");
+    string tokenLifetime = builder.Configuration.GetOrThrow("TOKEN_LIFETIME");
+    
+    builder.Services.AddIdentityModule(
+        connectionString, 
+        tokenIssuer, 
+        tokenAudience, 
+        tokenKey, 
+        tokenLifetime
+    );
+    
+    return builder;
+}
+```
+
+## Implementation
+
+### Google Login DTO
+
+```csharp Identity.Application/Dto/Requests/GoogleLoginDto.cs
+namespace Identity.Application.Dto.Requests;
+
+public sealed record GoogleLoginDto(string IdToken);
+```
+
+### Authentication Service
+
+The `AuthService` handles Google authentication:
+
+```csharp Identity.Application/Services/AuthService.cs
+using Google.Apis.Auth;
+using GooglePayload = Google.Apis.Auth.GoogleJsonWebSignature.Payload;
+
+public sealed class AuthService
+{
+    private readonly IAuthStore _authStore;
+    private readonly JwtService _jwtService;
+    private readonly EventBus _eventBus;
+    private readonly string _googlePassword;
+    
+    public AuthService(
+        IAuthStore authStore,
+        JwtService jwtService,
+        IConfiguration configuration,
+        EventBus eventBus)
+    {
+        _authStore = authStore;
+        _jwtService = jwtService;
+        _eventBus = eventBus;
+        _googlePassword = configuration["GOOGLE_PASSWORD"] 
+            ?? throw new Exception("GOOGLE_PASSWORD is not set");
+    }
+    
+    public async Task<Result<UserRolesDto>> ContinueWithGoogleAndGetRolesAsync(
+        GooglePayload payload, 
+        CancellationToken ct)
+    {
+        // Check if user exists
+        Result<Guid> checkUserExistsResult = await _authStore.CheckUserExistsAsync(
+            payload.Email, 
+            ct
+        );
+
+        UserRolesDto dto;
+        
+        if (checkUserExistsResult.IsFailure)
+        {
+            // New user - register via Google
+            Result<Guid> registerViaGoogleResult = await RegisterViaGoogle(
+                payload, 
+                _googlePassword, 
+                ct
+            );
+
+            if (registerViaGoogleResult.IsFailure)
+            {
+                return Result<UserRolesDto>.Failure(registerViaGoogleResult);
+            }
+            
+            Guid accountId = registerViaGoogleResult.Value;
+            
+            dto = new UserRolesDto(
+                accountId, 
+                payload.Email, 
+                [Roles.Customer]
+            );
+        }
+        else
+        {
+            // Existing user - login via Google
+            Result<UserRolesProjection> getUserRolesResult = 
+                await _authStore.LogInViaGoogleAndGetUserRolesAsync(
+                    payload.Email,
+                    _googlePassword,
+                    ct
+                );
+
+            if (getUserRolesResult.IsFailure)
+            {
+                return Result<UserRolesDto>.Failure(getUserRolesResult);
+            }
+
+            dto = getUserRolesResult.Value!.ToDto();
+        }
+        
+        return Result<UserRolesDto>.Success(dto);
+    }
+
+    private async Task<Result<Guid>> RegisterViaGoogle(
+        GooglePayload payload, 
+        string password, 
+        CancellationToken ct)
+    {
+        // 1. Create account
+        Result<Guid> registerAccountResult = await _authStore.RegisterAccountAsync(
+            payload.Email,
+            password,
+            Roles.Customer,
+            ct,
+            "Google"
+        );
+
+        if (registerAccountResult.IsFailure)
+        {
+            return Result<Guid>.Failure(registerAccountResult);
+        }
+            
+        Guid accountId = registerAccountResult.Value;
+            
+        // 2. Publish event to create customer profile
+        var @event = new CustomerAccountCreatedViaGoogle
+        {
+            AccountId = accountId,
+            LastName = payload.FamilyName,
+            FirstName = payload.GivenName,
+            PhotoUrl = payload.Picture
+        };
+        
+        Result<Guid> createCustomerResult = await _eventBus
+            .PublishWithSingleResultAsync<CustomerAccountCreatedViaGoogle, Guid>(
+                @event, 
+                ct
+            );
+
+        if (createCustomerResult.IsFailure)
+        {
+            return Result<Guid>.Failure(createCustomerResult);
+        }
+        
+        return Result<Guid>.Success(createCustomerResult.Value);
+    }
+}
+```
+
+### API Endpoint
+
+```csharp Identity.Endpoints/Endpoints/AuthEndpoints.cs
+public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder app)
+{
+    var group = app.MapGroup("/api/auth")
+        .WithTags("Authentication");
+    
+    group.MapPost("/google", GoogleLogin)
+        .AllowAnonymous();
+    
+    return app;
+}
+
+private static async Task<IResult> GoogleLogin(
+    [FromBody] GoogleLoginDto dto,
+    [FromServices] AuthService authService,
+    [FromServices] IConfiguration configuration,
+    CancellationToken ct)
+{
+    try
+    {
+        // 1. Verify Google ID token
+        string clientId = configuration["GOOGLE_CLIENT_ID"]!;
+        
+        GoogleJsonWebSignature.Payload payload = 
+            await GoogleJsonWebSignature.ValidateAsync(dto.IdToken);
+        
+        // 2. Verify audience matches our client ID
+        if (payload.Audience != clientId)
+        {
+            return Results.Unauthorized();
+        }
+        
+        // 3. Get or create user
+        Result<UserRolesDto> result = 
+            await authService.ContinueWithGoogleAndGetRolesAsync(payload, ct);
+        
+        if (result.IsFailure)
+        {
+            return Results.Problem(
+                detail: result.ErrorMessage,
+                statusCode: (int)result.StatusCode
+            );
+        }
+        
+        return Results.Ok(result.Value);
+    }
+    catch (InvalidJwtException)
+    {
+        return Results.Unauthorized();
+    }
+}
+```
+
+## Frontend Integration
+
+### Install Google Identity Services
+
+```bash
+npm install @react-oauth/google
+```
+
+### Configure Provider
+
+```jsx App.jsx
+import { GoogleOAuthProvider } from '@react-oauth/google';
+
+function App() {
+  return (
+    <GoogleOAuthProvider clientId="YOUR_GOOGLE_CLIENT_ID">
+      <YourApp />
+    </GoogleOAuthProvider>
+  );
+}
+```
+
+### Google Login Button
+
+```jsx LoginPage.jsx
+import { GoogleLogin } from '@react-oauth/google';
+import { useState } from 'react';
+
+function LoginPage() {
+  const [error, setError] = useState(null);
+  
+  const handleGoogleSuccess = async (credentialResponse) => {
+    try {
+      // Send ID token to backend
+      const response = await fetch('http://localhost:5000/api/auth/google', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          idToken: credentialResponse.credential
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Login failed');
+      }
+      
+      const data = await response.json();
+      
+      // Data contains accountId, email, and available roles
+      console.log('User roles:', data.roles);
+      
+      // Navigate to role selection or dashboard
+      if (data.roles.length === 1) {
+        // Only one role - get token directly
+        await getTokenForRole(data.email, data.roles[0]);
+      } else {
+        // Multiple roles - show selection
+        showRoleSelection(data);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+  
+  const handleGoogleError = () => {
+    setError('Google login failed');
+  };
+  
+  const getTokenForRole = async (email, role) => {
+    const response = await fetch('http://localhost:5000/api/auth/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email: email,
+        password: '', // Not needed for Google users
+        role: role
+      })
+    });
+    
+    const { token } = await response.json();
+    
+    // Store token
+    localStorage.setItem('jwt', token);
+    
+    // Navigate to dashboard
+    window.location.href = '/dashboard';
+  };
+  
+  return (
+    <div>
+      <h1>Login</h1>
+      
+      <GoogleLogin
+        onSuccess={handleGoogleSuccess}
+        onError={handleGoogleError}
+        useOneTap
+      />
+      
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+```
+
+## Authentication Flow
+
+<Steps>
+  <Step title="User Clicks Google Button">
+    Frontend shows Google login popup.
+  </Step>
+
+  <Step title="User Authorizes">
+    User logs in with Google and authorizes the app.
+  </Step>
+
+  <Step title="Frontend Receives ID Token">
+    Google returns an ID token (JWT) to the frontend.
+  </Step>
+
+  <Step title="Frontend Sends Token to Backend">
+    ```javascript
+    POST /api/auth/google
+    {
+      "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+    }
+    ```
+  </Step>
+
+  <Step title="Backend Verifies Token">
+    ```csharp
+    GoogleJsonWebSignature.Payload payload = 
+        await GoogleJsonWebSignature.ValidateAsync(idToken);
+    ```
+  </Step>
+
+  <Step title="Backend Creates/Finds User">
+    - New user: Create account + customer profile
+    - Existing user: Login and return roles
+  </Step>
+
+  <Step title="Frontend Gets JWT Token">
+    User selects role and gets JWT token:
+    ```javascript
+    POST /api/auth/token
+    {
+      "email": "user@gmail.com",
+      "password": "",
+      "role": "Customer"
+    }
+    ```
+  </Step>
+
+  <Step title="User Authenticated">
+    Frontend stores JWT and user is logged in.
+  </Step>
+</Steps>
+
+## Integration Event
+
+### Event Contract
+
+```csharp Identity.IntegrationEvents/CustomerAccountCreatedViaGoogle.cs
+public class CustomerAccountCreatedViaGoogle
+{
+    public Guid AccountId { get; init; }
+    public string FirstName { get; init; } = string.Empty;
+    public string LastName { get; init; } = string.Empty;
+    public string PhotoUrl { get; init; } = string.Empty;
+}
+```
+
+### Event Handler (Customer Module)
+
+```csharp Customer.Application/EventHandlers/CustomerAccountCreatedViaGoogleHandler.cs
+public class CustomerAccountCreatedViaGoogleHandler 
+    : IIntegrationEventHandler<CustomerAccountCreatedViaGoogle, Guid>
+{
+    private readonly ICustomerRepository _customerRepository;
+    
+    public async Task<Result<Guid>> HandleAsync(
+        CustomerAccountCreatedViaGoogle @event, 
+        CancellationToken ct)
+    {
+        // Create customer with Google profile data
+        Result<Customer> createResult = Customer.Create(
+            @event.AccountId,
+            @event.FirstName,
+            @event.LastName
+        );
+        
+        if (createResult.IsFailure)
+            return Result<Guid>.Failure(createResult);
+        
+        Customer customer = createResult.Value!;
+        
+        // Set profile photo URL if provided
+        if (!string.IsNullOrEmpty(@event.PhotoUrl))
+        {
+            customer.SetProfilePhotoUrl(@event.PhotoUrl);
+        }
+        
+        await _customerRepository.AddAsync(customer, ct);
+        await _customerRepository.SaveChangesAsync(ct);
+        
+        return Result<Guid>.Success(customer.Id);
+    }
+}
+```
+
+## Security Considerations
+
+<Steps>
+  <Step title="Always Verify ID Token">
+    Never trust the ID token without verification:
+    ```csharp
+    GoogleJsonWebSignature.Payload payload = 
+        await GoogleJsonWebSignature.ValidateAsync(idToken);
+    ```
+  </Step>
+
+  <Step title="Verify Audience">
+    Ensure the token was issued for your app:
+    ```csharp
+    if (payload.Audience != clientId)
+    {
+        return Results.Unauthorized();
+    }
+    ```
+  </Step>
+
+  <Step title="Check Token Expiration">
+    Google library handles this automatically, but you can check:
+    ```csharp
+    if (payload.ExpirationTimeSeconds < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+    {
+        return Results.Unauthorized();
+    }
+    ```
+  </Step>
+
+  <Step title="Use HTTPS in Production">
+    Google OAuth requires HTTPS for redirect URIs in production.
+  </Step>
+</Steps>
+
+## Testing
+
+### Test Locally
+
+1. Configure authorized origins: `http://localhost:3000`
+2. Add test users in Google Cloud Console
+3. Use test user credentials to sign in
+
+### Mock Google Authentication (Unit Tests)
+
+```csharp
+[Fact]
+public async Task GoogleLogin_WithValidToken_ShouldCreateUser()
+{
+    // Arrange
+    var mockAuthStore = new Mock<IAuthStore>();
+    var mockEventBus = new Mock<EventBus>();
+    
+    mockAuthStore.Setup(x => x.CheckUserExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        .ReturnsAsync(Result<Guid>.Failure("Not found"));
+    
+    mockAuthStore.Setup(x => x.RegisterAccountAsync(
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<CancellationToken>(),
+            "Google"
+        ))
+        .ReturnsAsync(Result<Guid>.Success(Guid.NewGuid()));
+    
+    var service = new AuthService(mockAuthStore.Object, null!, null!, mockEventBus.Object);
+    
+    var payload = new GoogleJsonWebSignature.Payload
+    {
+        Email = "test@gmail.com",
+        GivenName = "Test",
+        FamilyName = "User",
+        Picture = "https://..."
+    };
+    
+    // Act
+    var result = await service.ContinueWithGoogleAndGetRolesAsync(payload, CancellationToken.None);
+    
+    // Assert
+    Assert.True(result.IsSuccess);
+    Assert.Equal("test@gmail.com", result.Value!.Email);
+}
+```
+
+## Troubleshooting
+
+### Invalid ID Token
+
+**Issue:** "Invalid JWT signature"
+
+**Solution:** Ensure client ID matches the one used in frontend.
+
+### Unauthorized Redirect URI
+
+**Issue:** "redirect_uri_mismatch"
+
+**Solution:** Add redirect URI to Google Cloud Console authorized URIs.
+
+### User Already Exists
+
+**Issue:** User registered with email/password, then tries Google login.
+
+**Solution:** Link Google account to existing account:
+```csharp
+public async Task<VoidResult> LinkGoogleAccountAsync(Guid accountId, string googleId)
+{
+    // Store Google ID with account
+    // Allow login with either method
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Toxicity API" icon="shield-alt" href="/integrations/toxicity-api">
+    Content moderation integration
+  </Card>
+  
+  <Card title="Stripe Payments" icon="credit-card" href="/integrations/stripe-payments">
+    Payment processing
+  </Card>
+</CardGroup>

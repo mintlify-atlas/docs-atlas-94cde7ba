@@ -1,0 +1,388 @@
+---
+title: 'Support Management'
+description: 'Manage support agents and support operations (Admin)'
+---
+
+## Get All Support Agents (SuperAdmin)
+
+<api method="GET" path="/api/supports/page/{page}" auth="SuperAdmin" />
+
+Retrieves paginated list of all support agents.
+
+### Path Parameters
+
+<ParamField path="page" type="integer" required>
+  Page number (starts at 1)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="50">
+  Items per page (default: 50)
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of support agent objects
+</ResponseField>
+
+<ResponseField name="totalCount" type="integer">
+  Total number of support agents
+</ResponseField>
+
+<ResponseField name="currentPage" type="integer">
+  Current page number
+</ResponseField>
+
+<ResponseField name="totalPages" type="integer">
+  Total number of pages
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Support agents retrieved
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/supports/page/1?pageSize=50" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+{
+  "items": [
+    {
+      "id": "support-uuid-1",
+      "email": "support1@example.com",
+      "firstName": "Jane",
+      "lastName": "Support",
+      "isActive": true,
+      "totalResolved": 342,
+      "averageResponseTime": "2.5 hours",
+      "createdAt": "2024-01-01T10:00:00Z"
+    },
+    {
+      "id": "support-uuid-2",
+      "email": "support2@example.com",
+      "firstName": "John",
+      "lastName": "Helper",
+      "isActive": true,
+      "totalResolved": 198,
+      "averageResponseTime": "3.1 hours",
+      "createdAt": "2024-01-15T14:30:00Z"
+    }
+  ],
+  "totalCount": 12,
+  "currentPage": 1,
+  "totalPages": 1
+}
+```
+
+---
+
+## Create Support Agent (SuperAdmin)
+
+<api method="POST" path="/api/supports" auth="SuperAdmin" />
+
+Creates a new support agent account.
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  Support agent email address
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Initial password for the support agent
+</ParamField>
+
+<ParamField body="firstName" type="string" required>
+  Support agent first name
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  Support agent last name
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Support agent created successfully
+- `400 Bad Request` - Invalid data or validation error
+- `409 Conflict` - Email already exists
+- `500 Internal Server Error` - Error creating support agent
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/supports" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "newsupport@example.com",
+    "password": "SecurePassword123!",
+    "firstName": "Alex",
+    "lastName": "Support"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/supports', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${adminJwtToken}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    email: 'newsupport@example.com',
+    password: 'SecurePassword123!',
+    firstName: 'Alex',
+    lastName: 'Support'
+  })
+});
+
+if (response.status === 204) {
+  console.log('Support agent created successfully');
+}
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/supports',
+    headers={'Authorization': f'Bearer {admin_jwt_token}'},
+    json={
+        'email': 'newsupport@example.com',
+        'password': 'SecurePassword123!',
+        'firstName': 'Alex',
+        'lastName': 'Support'
+    }
+)
+
+if response.status_code == 204:
+    print('Support agent created successfully')
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**Email Already Exists (409 Conflict):**
+```json
+"An account with this email already exists"
+```
+
+**Invalid Email (400 Bad Request):**
+```json
+"Invalid email format"
+```
+
+**Weak Password (400 Bad Request):**
+```json
+"Password must be at least 8 characters and contain uppercase, lowercase, and numbers"
+```
+
+---
+
+## Delete Support Agent (SuperAdmin)
+
+<api method="DELETE" path="/api/supports/{supportId}" auth="SuperAdmin" />
+
+Deletes a support agent account.
+
+### Path Parameters
+
+<ParamField path="supportId" type="string (uuid)" required>
+  Support agent identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Support agent deleted
+- `400 Bad Request` - Cannot delete support agent with active tickets
+- `404 Not Found` - Support agent not found
+- `500 Internal Server Error` - Error during deletion
+
+### Example
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/supports/support-uuid" \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT_TOKEN"
+```
+
+### Error Response Examples
+
+**Active Tickets (400 Bad Request):**
+```json
+"Cannot delete support agent with active support tickets. Reassign tickets first."
+```
+
+<Warning>
+  Before deleting a support agent, ensure all their active tickets are resolved or reassigned to other agents.
+</Warning>
+
+---
+
+## Support Management Overview
+
+### Support Agent Roles
+
+Support agents have the **Support** role which grants them access to:
+
+- View all pending support requests
+- Respond to customer inquiries
+- Cancel/close support requests
+- View support request history
+
+### Support Agent Responsibilities
+
+<Info>
+  **Timely Responses**: Respond to customer requests within SLA timeframes
+</Info>
+
+<Info>
+  **Quality Service**: Provide accurate, helpful, and professional responses
+</Info>
+
+<Info>
+  **Documentation**: Keep detailed notes on support interactions
+</Info>
+
+<Info>
+  **Escalation**: Escalate complex issues to appropriate teams or supervisors
+</Info>
+
+---
+
+## Support Metrics and Performance
+
+### Key Performance Indicators (KPIs)
+
+**Response Time:**
+- Target: < 24 hours for first response
+- Measured from request creation to first support response
+
+**Resolution Time:**
+- Target: < 72 hours for complete resolution
+- Measured from request creation to final resolution
+
+**Customer Satisfaction:**
+- Tracked through post-resolution surveys
+- Target: > 90% satisfaction rate
+
+**Ticket Volume:**
+- Number of tickets handled per agent
+- Number of tickets resolved per day/week
+
+### Monitoring Support Queue
+
+```javascript
+// Example: Support dashboard metrics
+async function getSupportMetrics() {
+  // Get pending tickets
+  const pendingResponse = await fetch('/api/support-requests', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  const pendingTickets = await pendingResponse.json();
+  
+  // Calculate metrics
+  const metrics = {
+    totalPending: pendingTickets.length,
+    byCategory: {},
+    oldestTicket: null,
+    averageWaitTime: 0
+  };
+  
+  // Group by category
+  pendingTickets.forEach(ticket => {
+    metrics.byCategory[ticket.category] = 
+      (metrics.byCategory[ticket.category] || 0) + 1;
+  });
+  
+  // Find oldest ticket
+  if (pendingTickets.length > 0) {
+    metrics.oldestTicket = pendingTickets.reduce((oldest, ticket) => 
+      new Date(ticket.createdAt) < new Date(oldest.createdAt) ? ticket : oldest
+    );
+    
+    // Calculate average wait time
+    const now = new Date();
+    const totalWaitTime = pendingTickets.reduce((total, ticket) => {
+      return total + (now - new Date(ticket.createdAt));
+    }, 0);
+    metrics.averageWaitTime = totalWaitTime / pendingTickets.length;
+  }
+  
+  return metrics;
+}
+```
+
+---
+
+## Support Agent Onboarding
+
+<Steps>
+  <Step title="Create Agent Account">
+    SuperAdmin creates support agent account with email and password
+  </Step>
+  <Step title="Agent Receives Credentials">
+    New agent receives login credentials and onboarding materials
+  </Step>
+  <Step title="Training">
+    Agent completes training on products, policies, and support procedures
+  </Step>
+  <Step title="System Access">
+    Agent logs in with Support role and accesses support queue
+  </Step>
+  <Step title="Shadow Period">
+    New agent shadows experienced agents before handling tickets independently
+  </Step>
+  <Step title="Independent Work">
+    Agent begins handling support requests independently
+  </Step>
+</Steps>
+
+---
+
+## Best Practices for Support Teams
+
+### Response Templates
+
+Create response templates for common issues:
+
+```javascript
+const responseTemplates = {
+  orderNotReceived: `Thank you for contacting us. I've checked your order status and found that [status details]. [Next steps]`,
+  
+  productDefect: `We apologize for the inconvenience with your product. We take quality seriously and would like to make this right. [Resolution options]`,
+  
+  accountAccess: `I can help you with your account access issue. [Troubleshooting steps]`,
+  
+  generalInquiry: `Thank you for reaching out. [Answer to question]`
+};
+```
+
+### Escalation Guidelines
+
+Escalate to supervisors or specialized teams when:
+- Issue requires refunds > $100
+- Customer requests manager/supervisor
+- Technical issue beyond support agent expertise
+- Legal or compliance concerns
+- Abusive or threatening behavior
+
+### Quality Assurance
+
+<Info>
+  Regular review of support responses ensures quality and consistency across the team
+</Info>
+
+<Info>
+  Customer feedback helps identify areas for improvement in support processes
+</Info>

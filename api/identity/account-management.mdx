@@ -1,0 +1,272 @@
+---
+title: 'Account Management'
+description: 'Manage account settings and credentials'
+---
+
+## Change Email
+
+<api method="PATCH" path="/api/account/{accountId}/email" auth="Customer or Seller" />
+
+Changes the email address for an account.
+
+### Path Parameters
+
+<ParamField path="accountId" type="string (uuid)" required>
+  Account identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="currentEmail" type="string" required>
+  Current email address for verification
+</ParamField>
+
+<ParamField body="newEmail" type="string" required>
+  New email address
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password for verification
+</ParamField>
+
+### Response
+
+<ResponseField name="token" type="string">
+  New JWT token with updated email information
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Email changed successfully
+- `400 Bad Request` - Invalid email format or same as current email
+- `401 Unauthorized` - Missing or invalid authentication token
+- `404 Not Found` - Account not found or incorrect password
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/account/3fa85f64-5717-4562-b3fc-2c963f66afa6/email" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "currentEmail": "old@example.com",
+    "newEmail": "new@example.com",
+    "password": "SecurePass123!"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/account/${accountId}/email`,
+  {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      currentEmail: 'old@example.com',
+      newEmail: 'new@example.com',
+      password: 'SecurePass123!'
+    })
+  }
+);
+
+const newToken = await response.json();
+console.log('New JWT token:', newToken);
+```
+
+</CodeGroup>
+
+### Success Response
+
+```json
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im5ld0BleGFtcGxlLmNvbSJ9..."
+```
+
+### Error Response Examples
+
+**Email Already in Use (400 Bad Request):**
+```json
+"Email address is already registered to another account"
+```
+
+**Incorrect Password (404 Not Found):**
+```json
+"Current password is incorrect"
+```
+
+---
+
+## Change Password
+
+<api method="PATCH" path="/api/account/{accountId}/password" auth="Customer or Seller" />
+
+Changes the password for an account.
+
+### Path Parameters
+
+<ParamField path="accountId" type="string (uuid)" required>
+  Account identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="currentPassword" type="string" required>
+  Current password for verification
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  New password (must meet security requirements)
+</ParamField>
+
+### Response
+
+- `204 No Content` - Password changed successfully
+
+### Response Codes
+
+- `204 No Content` - Password changed successfully
+- `400 Bad Request` - New password same as current or doesn't meet requirements
+- `404 Not Found` - Account not found or incorrect current password
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/account/3fa85f64-5717-4562-b3fc-2c963f66afa6/password" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "currentPassword": "OldPass123!",
+    "newPassword": "NewSecurePass456!"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/account/${accountId}/password`,
+  {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      currentPassword: 'OldPass123!',
+      newPassword: 'NewSecurePass456!'
+    })
+  }
+);
+
+if (response.status === 204) {
+  console.log('Password changed successfully');
+}
+```
+
+```python Python
+import requests
+
+response = requests.patch(
+    f'https://your-server.com/api/account/{account_id}/password',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    json={
+        'currentPassword': 'OldPass123!',
+        'newPassword': 'NewSecurePass456!'
+    }
+)
+
+if response.status_code == 204:
+    print('Password changed successfully')
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("Authorization", $"Bearer {jwtToken}");
+
+var request = new {
+    CurrentPassword = "OldPass123!",
+    NewPassword = "NewSecurePass456!"
+};
+
+var response = await client.PatchAsJsonAsync(
+    $"https://your-server.com/api/account/{accountId}/password",
+    request
+);
+
+if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+{
+    Console.WriteLine("Password changed successfully");
+}
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**Same Password (400 Bad Request):**
+```json
+"New password must be different from current password"
+```
+
+**Weak Password (400 Bad Request):**
+```json
+"Password must be at least 8 characters and contain uppercase, lowercase, and numbers"
+```
+
+**Incorrect Current Password (404 Not Found):**
+```json
+"Current password is incorrect"
+```
+
+## Security Best Practices
+
+<Warning>
+  Always require the current password when changing email or password to prevent unauthorized changes.
+</Warning>
+
+<Info>
+  After changing email, users receive a new JWT token with updated claims. The old token remains valid until expiration.
+</Info>
+
+### Password Requirements
+
+Passwords should meet the following criteria:
+- Minimum 8 characters
+- At least one uppercase letter
+- At least one lowercase letter
+- At least one number
+- Special characters recommended
+
+### Email Change Flow
+
+<Steps>
+  <Step title="Verify Current Credentials">
+    User provides current email and password
+  </Step>
+  <Step title="Validate New Email">
+    System checks new email is valid and not already in use
+  </Step>
+  <Step title="Update Account">
+    Email is updated in the database
+  </Step>
+  <Step title="Issue New Token">
+    New JWT token is generated with updated email claim
+  </Step>
+  <Step title="Update Client">
+    Client should replace the old token with the new one
+  </Step>
+</Steps>
+
+## Additional Notes
+
+- Email changes are immediate and don't require verification (consider adding email verification in production)
+- Password changes take effect immediately
+- Users should be logged out from other sessions after password change for security
+- Both endpoints require valid authentication tokens
+- Account ID in the path must match the authenticated user's account

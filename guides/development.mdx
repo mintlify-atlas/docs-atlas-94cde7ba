@@ -1,0 +1,617 @@
+---
+title: Development Guide
+description: Set up your local development environment and start building
+---
+
+This guide walks you through setting up a complete development environment for Wolfix.Server and building your first feature.
+
+## Prerequisites
+
+Ensure you have completed the [Quickstart](/quickstart) and have the application running locally.
+
+## Development Tools
+
+### Recommended IDE
+
+<CardGroup cols={2}>
+  <Card title="JetBrains Rider" icon="laptop-code">
+    Best-in-class .NET IDE with excellent refactoring tools
+  </Card>
+  
+  <Card title="Visual Studio 2022" icon="code">
+    Full-featured IDE with great debugging capabilities
+  </Card>
+  
+  <Card title="VS Code" icon="file-code">
+    Lightweight editor with C# Dev Kit extension
+  </Card>
+  
+  <Card title="Visual Studio for Mac" icon="apple">
+    macOS-native .NET development
+  </Card>
+</CardGroup>
+
+### Required Extensions
+
+- **C# Dev Kit** (VS Code)
+- **Entity Framework Core Power Tools** (Visual Studio)
+- **.NET Aspire** workload
+
+### Database Tools
+
+- **pgAdmin** or **DBeaver** for PostgreSQL
+- **MongoDB Compass** for MongoDB
+- **Postman** or **Insomnia** for API testing
+
+## Project Structure
+
+Understanding the solution structure:
+
+```
+Wolfix.Server/
+├── Wolfix.Server.sln        # Solution file
+├── Wolfix.API/               # Main API project (entry point)
+├── Wolfix.AppHost/           # .NET Aspire orchestration
+├── Wolfix.ServiceDefaults/   # Shared Aspire configuration
+├── Shared.*/                 # Shared components
+├── {Module}.Domain/          # Domain layer per module
+├── {Module}.Application/     # Application layer per module
+├── {Module}.Infrastructure/  # Infrastructure layer per module
+├── {Module}.Endpoints/       # Endpoints layer per module
+├── {Module}.IntegrationEvents/ # Event contracts per module
+└── {Module}.Tests/           # Tests per module
+```
+
+## Development Workflow
+
+### 1. Create a New Branch
+
+```bash
+git checkout -b feature/my-new-feature
+```
+
+### 2. Build the Solution
+
+```bash
+dotnet build
+```
+
+### 3. Run Tests
+
+```bash
+# Run all tests
+dotnet test
+
+# Run tests for specific module
+dotnet test Catalog.Tests/Catalog.Tests.csproj
+
+# Run tests with coverage
+dotnet test --collect:"XPlat Code Coverage"
+```
+
+### 4. Run the Application
+
+```bash
+cd Wolfix.AppHost
+dotnet run
+```
+
+Or use your IDE's run configuration.
+
+## Building a New Feature
+
+Let's build a feature: **Add product rating summary**.
+
+<Steps>
+  <Step title="Add to Domain Layer">
+    Start with the domain - add business logic to the entity.
+    
+    ```csharp Catalog.Domain/ProductAggregate/Product.cs
+    public sealed class Product : BaseEntity
+    {
+        // Existing properties...
+        public double? AverageRating { get; private set; }
+        public int ReviewCount { get; private set; }
+        
+        // New method to get rating summary
+        public ProductRatingSummary GetRatingSummary()
+        {
+            if (_reviews.Count == 0)
+                return ProductRatingSummary.NoReviews();
+            
+            var ratingCounts = _reviews
+                .GroupBy(r => r.Rating)
+                .ToDictionary(g => g.Key, g => g.Count());
+            
+            return new ProductRatingSummary(
+                AverageRating ?? 0,
+                ReviewCount,
+                ratingCounts
+            );
+        }
+        
+        private void RecalculateAverageRating()
+        {
+            if (_reviews.Count == 0)
+            {
+                AverageRating = null;
+                ReviewCount = 0;
+                return;
+            }
+            
+            AverageRating = Math.Round(
+                _reviews.Average(r => r.Rating), 
+                MidpointRounding.AwayFromZero
+            );
+            ReviewCount = _reviews.Count;
+        }
+    }
+    ```
+    
+    ```csharp Catalog.Domain/ProductAggregate/ValueObjects/ProductRatingSummary.cs
+    public record ProductRatingSummary(
+        double AverageRating,
+        int TotalReviews,
+        Dictionary<uint, int> RatingCounts
+    )
+    {
+        public static ProductRatingSummary NoReviews() => new(
+            0,
+            0,
+            new Dictionary<uint, int>()
+        );
+    };
+    ```
+  </Step>
+
+  <Step title="Add to Application Layer">
+    Create DTOs and add service methods.
+    
+    ```csharp Catalog.Application/Dto/ProductRatingSummaryDto.cs
+    public record ProductRatingSummaryDto(
+        double AverageRating,
+        int TotalReviews,
+        Dictionary<uint, int> RatingDistribution
+    );
+    ```
+    
+    ```csharp Catalog.Application/Services/ProductService.cs
+    public async Task<Result<ProductRatingSummaryDto>> GetRatingSummaryAsync(
+        Guid productId, 
+        CancellationToken ct)
+    {
+        Product? product = await _productRepository.GetByIdAsync(productId, ct);
+        
+        if (product == null)
+            return Result<ProductRatingSummaryDto>.Failure(
+                "Product not found", 
+                HttpStatusCode.NotFound
+            );
+        
+        ProductRatingSummary summary = product.GetRatingSummary();
+        
+        var dto = new ProductRatingSummaryDto(
+            summary.AverageRating,
+            summary.TotalReviews,
+            summary.RatingCounts
+        );
+        
+        return Result<ProductRatingSummaryDto>.Success(dto);
+    }
+    ```
+  </Step>
+
+  <Step title="Add to Endpoints Layer">
+    Create the HTTP endpoint.
+    
+    ```csharp Catalog.Endpoints/Endpoints/ProductEndpoints.cs
+    public static IEndpointRouteBuilder MapProductEndpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/api/products")
+            .WithTags("Products");
+        
+        // Existing endpoints...
+        
+        group.MapGet("/{id:guid}/rating-summary", GetRatingSummary)
+            .WithName("GetProductRatingSummary")
+            .Produces<ProductRatingSummaryDto>()
+            .Produces(404);
+        
+        return app;
+    }
+    
+    private static async Task<IResult> GetRatingSummary(
+        Guid id,
+        [FromServices] ProductService productService,
+        CancellationToken ct)
+    {
+        var result = await productService.GetRatingSummaryAsync(id, ct);
+        
+        return result.IsSuccess
+            ? Results.Ok(result.Value)
+            : Results.Problem(
+                detail: result.ErrorMessage,
+                statusCode: (int)result.StatusCode
+              );
+    }
+    ```
+  </Step>
+
+  <Step title="Write Tests">
+    Add unit tests for domain logic.
+    
+    ```csharp Catalog.Tests/Domain/ProductRatingSummaryTests.cs
+    public class ProductRatingSummaryTests
+    {
+        [Fact]
+        public void GetRatingSummary_WithNoReviews_ShouldReturnEmptySummary()
+        {
+            // Arrange
+            var productResult = Product.Create(
+                "Test", "Desc", 99m, 
+                ProductStatus.Active, 
+                Guid.NewGuid(), 
+                Guid.NewGuid()
+            );
+            var product = productResult.Value!;
+            
+            // Act
+            var summary = product.GetRatingSummary();
+            
+            // Assert
+            Assert.Equal(0, summary.AverageRating);
+            Assert.Equal(0, summary.TotalReviews);
+            Assert.Empty(summary.RatingCounts);
+        }
+        
+        [Fact]
+        public void GetRatingSummary_WithMultipleReviews_ShouldCalculateCorrectly()
+        {
+            // Arrange
+            var productResult = Product.Create(
+                "Test", "Desc", 99m, 
+                ProductStatus.Active, 
+                Guid.NewGuid(), 
+                Guid.NewGuid()
+            );
+            var product = productResult.Value!;
+            
+            product.AddReview("Good", "Nice", 5, Guid.NewGuid());
+            product.AddReview("OK", "Decent", 4, Guid.NewGuid());
+            product.AddReview("Great", "Love it", 5, Guid.NewGuid());
+            
+            // Act
+            var summary = product.GetRatingSummary();
+            
+            // Assert
+            Assert.Equal(4.7, summary.AverageRating, 1); // 14/3 = 4.67 ≈ 4.7
+            Assert.Equal(3, summary.TotalReviews);
+            Assert.Equal(2, summary.RatingCounts[5]);
+            Assert.Equal(1, summary.RatingCounts[4]);
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Test Manually">
+    Run the application and test with curl or Postman:
+    
+    ```bash
+    curl http://localhost:5000/api/products/{product-id}/rating-summary
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "averageRating": 4.5,
+      "totalReviews": 10,
+      "ratingDistribution": {
+        "5": 6,
+        "4": 2,
+        "3": 1,
+        "2": 1
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Database Migrations
+
+### Creating a Migration
+
+When you modify entities, create a migration:
+
+```bash
+# From solution root
+dotnet ef migrations add AddRatingSummaryFields \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+### Applying Migrations
+
+```bash
+# Apply to database
+dotnet ef database update \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+### Removing Last Migration
+
+```bash
+dotnet ef migrations remove \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API
+```
+
+<Warning>
+  Never modify migration files manually after they've been applied to production. Create a new migration instead.
+</Warning>
+
+## Debugging
+
+### Debug with .NET Aspire
+
+1. Set breakpoints in your code
+2. Run Wolfix.AppHost in debug mode
+3. Aspire will launch all dependencies
+4. Your breakpoints will be hit
+
+### Debug a Specific Module
+
+1. Set Wolfix.API as startup project
+2. Configure environment variables in `launchSettings.json`
+3. Run containers manually:
+   ```bash
+   docker run -d -p 27017:27017 mongo
+   docker run -d -p 8000:8000 iluhahr/toxic-ai-api:latest
+   ```
+4. Start debugging
+
+### Debug with Hot Reload
+
+.NET 9 supports hot reload for most code changes:
+
+```bash
+dotnet watch --project Wolfix.API
+```
+
+Changes to most C# files will be applied without restarting.
+
+## Code Style
+
+### Naming Conventions
+
+- **Classes**: PascalCase - `ProductService`
+- **Interfaces**: PascalCase with `I` prefix - `IProductRepository`
+- **Methods**: PascalCase - `GetProductAsync`
+- **Parameters**: camelCase - `productId`
+- **Private fields**: camelCase with `_` prefix - `_productRepository`
+
+### Domain Layer Rules
+
+<Steps>
+  <Step title="Use Factory Methods">
+    ```csharp
+    // ✅ Good
+    public static Result<Product> Create(...) { }
+    
+    // ❌ Bad
+    public Product(...) { } // Public constructor
+    ```
+  </Step>
+
+  <Step title="Private Setters">
+    ```csharp
+    // ✅ Good
+    public string Title { get; private set; }
+    
+    // ❌ Bad
+    public string Title { get; set; }
+    ```
+  </Step>
+
+  <Step title="Encapsulate Collections">
+    ```csharp
+    // ✅ Good
+    private readonly List<Review> _reviews = [];
+    public IReadOnlyCollection<Review> Reviews => _reviews.AsReadOnly();
+    
+    // ❌ Bad
+    public List<Review> Reviews { get; set; }
+    ```
+  </Step>
+
+  <Step title="Return Result Types">
+    ```csharp
+    // ✅ Good
+    public VoidResult ChangePrice(decimal price) { }
+    
+    // ❌ Bad
+    public void ChangePrice(decimal price) { throw new Exception(); }
+    ```
+  </Step>
+</Steps>
+
+## Common Tasks
+
+### Add a New Module
+
+<Steps>
+  <Step title="Create Projects">
+    ```bash
+    dotnet new classlib -n MyModule.Domain
+    dotnet new classlib -n MyModule.Application
+    dotnet new classlib -n MyModule.Infrastructure
+    dotnet new classlib -n MyModule.Endpoints
+    dotnet new classlib -n MyModule.IntegrationEvents
+    dotnet new xunit -n MyModule.Tests
+    ```
+  </Step>
+
+  <Step title="Add Project References">
+    ```bash
+    dotnet add MyModule.Application reference MyModule.Domain
+    dotnet add MyModule.Infrastructure reference MyModule.Application
+    dotnet add MyModule.Endpoints reference MyModule.Application
+    # etc.
+    ```
+  </Step>
+
+  <Step title="Create DbContext">
+    ```csharp MyModule.Infrastructure/MyModuleDbContext.cs
+    public class MyModuleDbContext : DbContext
+    {
+        public DbSet<MyEntity> MyEntities { get; set; }
+        
+        public MyModuleDbContext(DbContextOptions<MyModuleDbContext> options)
+            : base(options) { }
+    }
+    ```
+  </Step>
+
+  <Step title="Register Module">
+    ```csharp MyModule.Endpoints/Extensions/ServiceCollectionExtensions.cs
+    public static IServiceCollection AddMyModule(
+        this IServiceCollection services,
+        string connectionString)
+    {
+        services.AddDbContext<MyModuleDbContext>(options =>
+            options.UseNpgsql(connectionString));
+        
+        // Register repositories, services, etc.
+        
+        return services;
+    }
+    ```
+    
+    ```csharp Wolfix.API/Extensions/WebApplicationBuilderExtension.cs
+    public static async Task<WebApplicationBuilder> AddAllModules(
+        this WebApplicationBuilder builder)
+    {
+        // Existing modules...
+        builder.AddMyModule(connectionString);
+        return builder;
+    }
+    ```
+  </Step>
+</Steps>
+
+### Add an Integration Event
+
+<Steps>
+  <Step title="Define Event Contract">
+    ```csharp MyModule.IntegrationEvents/MyEntityCreated.cs
+    public class MyEntityCreated
+    {
+        public Guid EntityId { get; init; }
+        public string Name { get; init; }
+        public DateTime CreatedAt { get; init; }
+    }
+    ```
+  </Step>
+
+  <Step title="Publish Event">
+    ```csharp MyModule.Application/Services/MyService.cs
+    public async Task<Result<MyDto>> CreateAsync(...)
+    {
+        // Create entity...
+        
+        var @event = new MyEntityCreated
+        {
+            EntityId = entity.Id,
+            Name = entity.Name,
+            CreatedAt = DateTime.UtcNow
+        };
+        
+        await _eventBus.PublishAsync(@event, ct);
+        
+        return Result<MyDto>.Success(dto);
+    }
+    ```
+  </Step>
+
+  <Step title="Create Event Handler">
+    ```csharp OtherModule.Application/EventHandlers/MyEntityCreatedHandler.cs
+    public class MyEntityCreatedHandler 
+        : IIntegrationEventHandler<MyEntityCreated, bool>
+    {
+        public async Task<Result<bool>> HandleAsync(
+            MyEntityCreated @event, 
+            CancellationToken ct)
+        {
+            // Handle event
+            return Result<bool>.Success(true);
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Register Handler">
+    ```csharp OtherModule.Endpoints/Extensions/ServiceCollectionExtensions.cs
+    services.AddScoped<IIntegrationEventHandler<MyEntityCreated, bool>, 
+        MyEntityCreatedHandler>();
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    Kill the process using the port:
+    ```bash
+    # Find process
+    lsof -i :5000
+    
+    # Kill process
+    kill -9 <PID>
+    ```
+  </Accordion>
+
+  <Accordion title="Database connection failed">
+    Check connection string in `.env` file:
+    ```bash
+    DB=Host=localhost;Port=5432;Database=wolfix;Username=postgres;Password=yourpassword
+    ```
+    
+    Ensure PostgreSQL is running:
+    ```bash
+    docker ps | grep postgres
+    ```
+  </Accordion>
+
+  <Accordion title="Migration already applied">
+    Reset database:
+    ```bash
+    dotnet ef database drop --project {Module}.Infrastructure --startup-project Wolfix.API
+    dotnet ef database update --project {Module}.Infrastructure --startup-project Wolfix.API
+    ```
+  </Accordion>
+
+  <Accordion title="Aspire dashboard not accessible">
+    Check dashboard URL in terminal output. Default is `http://localhost:15000`.
+    
+    Ensure no firewall is blocking the port.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Learn how to deploy to production
+  </Card>
+  
+  <Card title="Database Migrations" icon="database" href="/guides/database-migrations">
+    Advanced migration strategies
+  </Card>
+  
+  <Card title="Aspire Orchestration" icon="cubes" href="/guides/aspire-orchestration">
+    Deep dive into .NET Aspire
+  </Card>
+</CardGroup>

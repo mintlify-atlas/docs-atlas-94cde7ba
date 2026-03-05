@@ -1,0 +1,208 @@
+---
+title: 'Google Authentication'
+description: 'Sign in with Google OAuth'
+---
+
+## Continue with Google
+
+<api method="POST" path="/api/account/customer/google" auth="none" />
+
+Authenticates or registers a user using Google OAuth, returning available roles for the account.
+
+### Request Body
+
+<ParamField body="idToken" type="string" required>
+  Google ID token obtained from Google Sign-In client library
+</ParamField>
+
+### Response
+
+<ResponseField name="accountId" type="string (uuid)">
+  Unique identifier for the user account
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  User's email address from Google account
+</ResponseField>
+
+<ResponseField name="roles" type="array<string>">
+  List of roles assigned to this account (e.g., ["Customer"])
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Authentication successful
+- `400 Bad Request` - Invalid or expired Google token
+- `403 Forbidden` - Account disabled
+- `404 Not Found` - Account-related error
+- `409 Conflict` - Email conflict (rare)
+- `500 Internal Server Error` - Server error
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/account/customer/google" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjI3MGU..."
+  }'
+```
+
+```javascript JavaScript
+// After getting Google ID token from Google Sign-In
+const response = await fetch('https://your-server.com/api/account/customer/google', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    idToken: googleIdToken
+  })
+});
+
+const userRoles = await response.json();
+console.log('Account ID:', userRoles.accountId);
+console.log('Email:', userRoles.email);
+console.log('Roles:', userRoles.roles);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/account/customer/google',
+    json={
+        'idToken': google_id_token
+    }
+)
+
+user_roles = response.json()
+print(f"Account ID: {user_roles['accountId']}")
+print(f"Email: {user_roles['email']}")
+print(f"Roles: {user_roles['roles']}")
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+var request = new { IdToken = googleIdToken };
+
+var response = await client.PostAsJsonAsync(
+    "https://your-server.com/api/account/customer/google",
+    request
+);
+
+var userRoles = await response.Content.ReadFromJsonAsync<UserRolesDto>();
+Console.WriteLine($"Account ID: {userRoles.AccountId}");
+Console.WriteLine($"Email: {userRoles.Email}");
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+{
+  "accountId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "user@gmail.com",
+  "roles": ["Customer"]
+}
+```
+
+### Error Response Examples
+
+**Invalid Google Token (400 Bad Request):**
+```json
+"Invalid token"
+```
+
+**Email Conflict (409 Conflict):**
+```json
+"An account with this email already exists with password authentication"
+```
+
+## Google Sign-In Integration
+
+### Client-Side Setup
+
+Before calling this endpoint, you need to integrate Google Sign-In on your client:
+
+<Steps>
+  <Step title="Configure Google OAuth">
+    Set up Google OAuth in Google Cloud Console and obtain a Client ID
+  </Step>
+  <Step title="Implement Google Sign-In">
+    Use Google Sign-In library to authenticate users and obtain ID token
+  </Step>
+  <Step title="Send ID Token">
+    Send the ID token to this endpoint to authenticate with your server
+  </Step>
+  <Step title="Get Role Token">
+    Use the returned accountId to get a JWT token via `/api/account/token`
+  </Step>
+</Steps>
+
+### JavaScript Example with Google Sign-In
+
+```javascript
+// Load Google Sign-In library
+google.accounts.id.initialize({
+  client_id: 'YOUR_GOOGLE_CLIENT_ID',
+  callback: handleGoogleSignIn
+});
+
+async function handleGoogleSignIn(response) {
+  const idToken = response.credential;
+  
+  // Send to server
+  const serverResponse = await fetch('https://your-server.com/api/account/customer/google', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken })
+  });
+  
+  const userRoles = await serverResponse.json();
+  
+  // Now get a JWT token for Customer role
+  const tokenResponse = await fetch('https://your-server.com/api/account/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      accountId: userRoles.accountId,
+      role: 'Customer'
+    })
+  });
+  
+  const jwtToken = await tokenResponse.json();
+  // Store jwtToken for authenticated requests
+}
+```
+
+## Behavior Notes
+
+<Info>
+  If the Google account email doesn't exist in the system, a new customer account is automatically created.
+</Info>
+
+<Warning>
+  The Google ID token must be valid and issued to your configured Google Client ID. Expired or invalid tokens will be rejected.
+</Warning>
+
+## Configuration
+
+Server configuration requires setting the `GOOGLE_CLIENT_ID` environment variable:
+
+```bash
+GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
+```
+
+## Next Steps
+
+After Google authentication:
+
+1. Receive account information and available roles
+2. Call `/api/account/token` to get a JWT token for the desired role
+3. Use the JWT token for authenticated API requests

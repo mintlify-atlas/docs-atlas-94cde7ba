@@ -1,0 +1,569 @@
+---
+title: 'Order Module'
+description: 'Order processing, delivery methods, and payment management'
+icon: 'cart-shopping'
+---
+
+## Overview
+
+The **Order** module manages the complete order lifecycle - from creation to delivery. It handles order items, delivery information, payment tracking, and integrates with external delivery services and payment processors.
+
+## Bounded Context
+
+The Order module is responsible for:
+
+- Order creation and management
+- Order item tracking
+- Delivery method configuration (city, department, post machine)
+- Delivery status tracking
+- Payment option and status management
+- Bonus points usage
+- Order history and receipts
+
+## Domain Layer
+
+**Location**: `Order.Domain/`
+
+### Aggregates
+
+#### Order Aggregate
+
+**Root**: `Order` entity
+
+```csharp OrderAggregate/Order.cs
+public sealed class Order : BaseEntity
+{
+    public string Number { get; private set; } = Guid.CreateVersion7().ToString();
+    
+    public CustomerInfo CustomerInfo { get; private set; }
+    public Guid CustomerId { get; private set; }
+    public RecipientInfo RecipientInfo { get; private set; }
+    
+    public OrderDeliveryStatus DeliveryStatus = OrderDeliveryStatus.Preparing;
+    public OrderPaymentOption PaymentOption { get; private set; }
+    public OrderPaymentStatus PaymentStatus { get; private set; }
+    
+    public DeliveryInfo DeliveryInfo { get; private set; }
+    public string DeliveryMethodName { get; private set; }
+    
+    public bool WithBonuses { get; private set; }
+    public decimal UsedBonusesAmount { get; private set; }
+    public decimal Price { get; private set; }
+    
+    public string? PaymentIntentId { get; private set; } = string.Empty;
+    public DateTime CreatedAt { get; private set; } = DateTime.UtcNow;
+    
+    private readonly List<OrderItem> _orderItems = [];
+    public IReadOnlyCollection<OrderItemInfo> OrderItems => _orderItems
+        .Select(oi => (OrderItemInfo)oi)
+        .ToList()
+        .AsReadOnly();
+    
+    public static Result<Order> Create(
+        string customerFirstName, string customerLastName, string customerMiddleName,
+        string customerPhoneNumber, string customerEmail, Guid customerId, 
+        string recipientFirstName, string recipientLastName, string recipientMiddleName, 
+        string recipientPhoneNumber, OrderPaymentOption paymentOption, 
+        OrderPaymentStatus paymentStatus, string deliveryMethodName, 
+        uint? deliveryInfoNumber, string deliveryInfoCity, string deliveryInfoStreet,
+        uint deliveryInfoHouseNumber, DeliveryOption deliveryOption,
+        bool withBonuses, decimal usedBonusesAmount, decimal price)
+    {
+        // Validate payment option and status consistency
+        if (paymentOption == OrderPaymentOption.WhileReceiving && 
+            paymentStatus == OrderPaymentStatus.Paid)
+        {
+            return Result<Order>.Failure(
+                "Order cannot be paid already when payment option is while receiving");
+        }
+        
+        // Create value objects
+        Result<CustomerInfo> customerInfoResult = CustomerInfo.Create(
+            customerFirstName, customerLastName, customerMiddleName, 
+            customerPhoneNumber, customerEmail);
+        if (customerInfoResult.IsFailure)
+            return Result<Order>.Failure(customerInfoResult);
+        
+        Result<RecipientInfo> recipientInfoResult = RecipientInfo.Create(
+            recipientFirstName, recipientLastName, recipientMiddleName, recipientPhoneNumber);
+        if (recipientInfoResult.IsFailure)
+            return Result<Order>.Failure(recipientInfoResult);
+        
+        Result<DeliveryInfo> deliveryInfoResult = DeliveryInfo.Create(
+            deliveryInfoNumber, deliveryInfoCity, deliveryInfoStreet, 
+            deliveryInfoHouseNumber, deliveryOption);
+        if (deliveryInfoResult.IsFailure)
+            return Result<Order>.Failure(deliveryInfoResult);
+        
+        var order = new Order(
+            customerInfoResult.Value!, customerId, recipientInfoResult.Value!,
+            paymentOption, paymentStatus, deliveryMethodName, deliveryInfoResult.Value!,
+            withBonuses, usedBonusesAmount, price);
+        
+        return Result<Order>.Success(order, HttpStatusCode.Created);
+    }
+    
+    // Order item management
+    public VoidResult AddOrderItem(
+        Guid productId, string productTitle, decimal productPrice, 
+        uint quantity, uint bonuses)
+    {
+        Result<OrderItem> createResult = OrderItem.Create(
+            this, productId, productTitle, productPrice, quantity, bonuses);
+        
+        return createResult.Map(
+            onSuccess: orderItem =>
+            {
+                _orderItems.Add(orderItem);
+                return VoidResult.Success();
+            },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    // Payment
+    public VoidResult SetPaymentIntentId(string paymentIntentId)
+    {
+        if (string.IsNullOrWhiteSpace(paymentIntentId))
+            return VoidResult.Failure("Payment intent ID is required");
+        
+        PaymentIntentId = paymentIntentId;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult MarkAsPaid()
+    {
+        if (PaymentStatus == OrderPaymentStatus.Paid)
+            return VoidResult.Failure("Order is already paid");
+        
+        PaymentStatus = OrderPaymentStatus.Paid;
+        return VoidResult.Success();
+    }
+    
+    // Delivery status
+    public VoidResult ChangeDeliveryStatus(OrderDeliveryStatus status)
+    {
+        if (!Enum.IsDefined(status))
+            return VoidResult.Failure("Invalid delivery status");
+        
+        DeliveryStatus = status;
+        return VoidResult.Success();
+    }
+}
+```
+
+**Child Entities**:
+
+```csharp Entities/OrderItem.cs
+public sealed class OrderItem : BaseEntity
+{
+    public Order Order { get; private set; }
+    public Guid ProductId { get; private set; }
+    public string ProductTitle { get; private set; }
+    public decimal ProductPrice { get; private set; }
+    public uint Quantity { get; private set; }
+    public uint Bonuses { get; private set; }
+    
+    public static Result<OrderItem> Create(
+        Order order, Guid productId, string productTitle, 
+        decimal productPrice, uint quantity, uint bonuses)
+    {
+        if (productId == Guid.Empty)
+            return Result<OrderItem>.Failure("Product ID is required");
+        if (string.IsNullOrWhiteSpace(productTitle))
+            return Result<OrderItem>.Failure("Product title is required");
+        if (productPrice <= 0)
+            return Result<OrderItem>.Failure("Product price must be positive");
+        if (quantity == 0)
+            return Result<OrderItem>.Failure("Quantity must be at least 1");
+        
+        return Result<OrderItem>.Success(
+            new OrderItem(order, productId, productTitle, productPrice, quantity, bonuses));
+    }
+}
+```
+
+**Value Objects**:
+
+<CodeGroup>
+
+```csharp ValueObjects/CustomerInfo.cs
+public sealed class CustomerInfo
+{
+    public string FirstName { get; private set; }
+    public string LastName { get; private set; }
+    public string MiddleName { get; private set; }
+    public string PhoneNumber { get; private set; }
+    public string Email { get; private set; }
+    
+    public static Result<CustomerInfo> Create(
+        string firstName, string lastName, string middleName, 
+        string phoneNumber, string email)
+    {
+        // Validation logic
+        return Result<CustomerInfo>.Success(
+            new CustomerInfo(firstName, lastName, middleName, phoneNumber, email));
+    }
+}
+```
+
+```csharp ValueObjects/RecipientInfo.cs
+public sealed class RecipientInfo
+{
+    public string FirstName { get; private set; }
+    public string LastName { get; private set; }
+    public string MiddleName { get; private set; }
+    public string PhoneNumber { get; private set; }
+    
+    public static Result<RecipientInfo> Create(
+        string firstName, string lastName, string middleName, string phoneNumber)
+    {
+        // Can be same as customer or different person
+        return Result<RecipientInfo>.Success(
+            new RecipientInfo(firstName, lastName, middleName, phoneNumber));
+    }
+}
+```
+
+```csharp ValueObjects/DeliveryInfo.cs
+public sealed class DeliveryInfo
+{
+    public uint? Number { get; private set; }  // Department or post machine number
+    public string City { get; private set; }
+    public string Street { get; private set; }
+    public uint HouseNumber { get; private set; }
+    public DeliveryOption DeliveryOption { get; private set; }  // Department, PostMachine, Courier
+    
+    public static Result<DeliveryInfo> Create(
+        uint? number, string city, string street, 
+        uint houseNumber, DeliveryOption deliveryOption)
+    {
+        if (deliveryOption != DeliveryOption.Courier && number == null)
+            return Result<DeliveryInfo>.Failure(
+                "Number is required for Department and PostMachine delivery options");
+        
+        return Result<DeliveryInfo>.Success(
+            new DeliveryInfo(number, city, street, houseNumber, deliveryOption));
+    }
+}
+```
+
+</CodeGroup>
+
+**Enums**:
+
+```csharp Enums/OrderDeliveryStatus.cs
+public enum OrderDeliveryStatus
+{
+    Preparing,      // Order is being prepared
+    Sent,           // Sent to delivery service
+    InTransit,      // On the way
+    Delivered,      // Successfully delivered
+    Cancelled       // Order cancelled
+}
+
+public enum OrderPaymentOption
+{
+    Online,         // Pay online (Stripe)
+    WhileReceiving  // Cash on delivery
+}
+
+public enum OrderPaymentStatus
+{
+    Pending,
+    Paid,
+    Failed,
+    Refunded
+}
+
+public enum DeliveryOption
+{
+    Department,     // Pickup from department
+    PostMachine,    // Pickup from post machine
+    Courier         // Home delivery
+}
+```
+
+#### DeliveryMethod Aggregate
+
+**Root**: `DeliveryMethod` entity
+
+```csharp DeliveryAggregate/DeliveryMethod.cs
+public sealed class DeliveryMethod : BaseEntity
+{
+    public string Name { get; private set; }  // e.g., "Nova Poshta", "Ukrposhta"
+    
+    private readonly List<City> _cities = [];
+    public IReadOnlyCollection<CityInfo> Cities => /* ... */;
+    
+    public static Result<DeliveryMethod> Create(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return Result<DeliveryMethod>.Failure("Name is required");
+        
+        return Result<DeliveryMethod>.Success(new DeliveryMethod(name));
+    }
+    
+    public VoidResult AddCity(string cityName)
+    {
+        if (_cities.Any(c => c.Name == cityName))
+            return VoidResult.Failure("City already exists");
+        
+        Result<City> result = City.Create(this, cityName);
+        return result.Map(
+            onSuccess: city => { _cities.Add(city); return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+}
+```
+
+**Child Entities**:
+
+```csharp Entities/City.cs
+public sealed class City : BaseEntity
+{
+    public string Name { get; private set; }
+    public DeliveryMethod DeliveryMethod { get; private set; }
+    
+    private readonly List<Department> _departments = [];
+    private readonly List<PostMachine> _postMachines = [];
+}
+```
+
+### Repository Interfaces
+
+```csharp Interfaces/IOrderRepository.cs
+public interface IOrderRepository : IBaseRepository<Order>
+{
+    Task<Order?> GetByIdWithItemsAsync(Guid id, CancellationToken ct);
+    Task<IReadOnlyCollection<OrderProjection>> GetByCustomerIdAsync(
+        Guid customerId, CancellationToken ct);
+    Task<Order?> GetByNumberAsync(string orderNumber, CancellationToken ct);
+}
+```
+
+## Application Layer
+
+**Location**: `Order.Application/`
+
+### Services
+
+```csharp Services/OrderService.cs
+public sealed class OrderService
+{
+    public async Task<Result<Guid>> CreateOrderAsync(
+        CreateOrderDto dto, 
+        Guid customerId,
+        CancellationToken ct)
+    {
+        // Fetch customer info via integration event
+        Result<CustomerInfoDto> customerInfoResult = await _eventBus
+            .PublishWithSingleResultAsync<FetchCustomerInfo, CustomerInfoDto>(
+                new FetchCustomerInfo(customerId), ct);
+        
+        if (customerInfoResult.IsFailure)
+            return Result<Guid>.Failure(customerInfoResult);
+        
+        var customerInfo = customerInfoResult.Value!;
+        
+        // Calculate total price from cart items
+        decimal totalPrice = dto.OrderItems.Sum(oi => oi.Price * oi.Quantity);
+        
+        // Apply bonus discount if requested
+        decimal usedBonuses = 0m;
+        if (dto.WithBonuses)
+        {
+            usedBonuses = Math.Min(dto.UsedBonusesAmount, customerInfo.BonusesAmount);
+            totalPrice -= usedBonuses;
+        }
+        
+        // Create order
+        Result<Order> createOrderResult = Order.Create(
+            customerInfo.FirstName, customerInfo.LastName, customerInfo.MiddleName,
+            customerInfo.PhoneNumber, customerInfo.Email, customerId,
+            dto.RecipientFirstName, dto.RecipientLastName, dto.RecipientMiddleName,
+            dto.RecipientPhoneNumber, dto.PaymentOption, OrderPaymentStatus.Pending,
+            dto.DeliveryMethodName, dto.DeliveryNumber, dto.DeliveryCity, 
+            dto.DeliveryStreet, dto.DeliveryHouseNumber, dto.DeliveryOption,
+            dto.WithBonuses, usedBonuses, totalPrice);
+        
+        if (createOrderResult.IsFailure)
+            return Result<Guid>.Failure(createOrderResult);
+        
+        Order order = createOrderResult.Value!;
+        
+        // Add order items
+        foreach (var itemDto in dto.OrderItems)
+        {
+            order.AddOrderItem(
+                itemDto.ProductId, itemDto.ProductTitle, 
+                itemDto.Price, itemDto.Quantity, itemDto.Bonuses);
+        }
+        
+        // Save order
+        await _orderRepository.AddAsync(order, ct);
+        await _orderRepository.SaveChangesAsync(ct);
+        
+        // If paying online, create Stripe payment intent
+        if (dto.PaymentOption == OrderPaymentOption.Online)
+        {
+            var paymentIntent = await _stripeService.CreatePaymentIntentAsync(
+                totalPrice, order.Number);
+            order.SetPaymentIntentId(paymentIntent.Id);
+            await _orderRepository.SaveChangesAsync(ct);
+        }
+        
+        // Deduct bonuses from customer
+        if (dto.WithBonuses)
+        {
+            await _eventBus.PublishWithoutResultAsync(
+                new DeductBonusesFromCustomer(customerId, usedBonuses), ct);
+        }
+        
+        return Result<Guid>.Success(order.Id);
+    }
+    
+    public async Task<VoidResult> ConfirmPaymentAsync(
+        string paymentIntentId,
+        CancellationToken ct)
+    {
+        // Verify payment with Stripe
+        var paymentIntent = await _stripeService.GetPaymentIntentAsync(paymentIntentId);
+        if (paymentIntent.Status != "succeeded")
+            return VoidResult.Failure("Payment not successful");
+        
+        // Find order by payment intent ID
+        Order? order = await _orderRepository.GetByPaymentIntentIdAsync(paymentIntentId, ct);
+        if (order == null)
+            return VoidResult.Failure("Order not found", HttpStatusCode.NotFound);
+        
+        // Mark as paid
+        order.MarkAsPaid();
+        await _orderRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Infrastructure Layer
+
+**Location**: `Order.Infrastructure/`
+
+### Repository Implementation
+
+```csharp Repositories/OrderRepository.cs
+public class OrderRepository : BaseRepository<OrderContext, Order>, IOrderRepository
+{
+    public async Task<Order?> GetByIdWithItemsAsync(Guid id, CancellationToken ct)
+    {
+        return await _context.Orders
+            .Include(o => o.OrderItems)
+            .FirstOrDefaultAsync(o => o.Id == id, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<OrderProjection>> GetByCustomerIdAsync(
+        Guid customerId, 
+        CancellationToken ct)
+    {
+        return await _context.Orders
+            .AsNoTracking()
+            .Where(o => o.CustomerId == customerId)
+            .OrderByDescending(o => o.CreatedAt)
+            .Select(o => new OrderProjection
+            {
+                Id = o.Id,
+                Number = o.Number,
+                Price = o.Price,
+                DeliveryStatus = o.DeliveryStatus,
+                PaymentStatus = o.PaymentStatus,
+                CreatedAt = o.CreatedAt
+            })
+            .ToListAsync(ct);
+    }
+}
+```
+
+### EF Core Configurations
+
+```csharp Configurations/OrderConfiguration.cs
+public class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        builder.HasKey(o => o.Id);
+        
+        builder.Property(o => o.Number).IsRequired().HasMaxLength(50);
+        builder.HasIndex(o => o.Number).IsUnique();
+        
+        builder.OwnsOne(o => o.CustomerInfo, ci =>
+        {
+            ci.Property(c => c.FirstName).HasMaxLength(100);
+            ci.Property(c => c.Email).HasMaxLength(256);
+        });
+        
+        builder.OwnsOne(o => o.RecipientInfo);
+        builder.OwnsOne(o => o.DeliveryInfo);
+        
+        builder.HasMany(o => o.OrderItems)
+            .WithOne(oi => oi.Order)
+            .HasForeignKey("OrderId")
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Order.Endpoints/`
+
+```csharp Endpoints/OrderEndpoints.cs
+internal static class OrderEndpoints
+{
+    public static void MapOrderEndpoints(this IEndpointRouteBuilder app)
+    {
+        var orderGroup = app.MapGroup("api/orders")
+            .WithTags("Orders")
+            .RequireAuthorization();
+        
+        orderGroup.MapPost("", CreateOrder)
+            .RequireAuthorization("Customer")
+            .WithSummary("Create new order");
+        
+        orderGroup.MapGet("my", GetMyOrders)
+            .RequireAuthorization("Customer")
+            .WithSummary("Get orders for current customer");
+        
+        orderGroup.MapGet("{id:guid}", GetOrderById)
+            .WithSummary("Get order by ID");
+        
+        orderGroup.MapPost("payment/confirm", ConfirmPayment)
+            .WithSummary("Confirm online payment");
+        
+        orderGroup.MapPatch("{id:guid}/delivery-status", UpdateDeliveryStatus)
+            .RequireAuthorization("Admin")
+            .WithSummary("Update order delivery status");
+    }
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Order.IntegrationEvents/
+public record FetchCustomerInfo(Guid CustomerId) : IIntegrationEvent;
+public record DeductBonusesFromCustomer(Guid CustomerId, decimal Amount) : IIntegrationEvent;
+public record OrderCreated(Guid OrderId, Guid CustomerId, decimal TotalPrice) : IIntegrationEvent;
+```
+
+### Consumed
+
+Order module primarily consumes events from Customer module to validate customer data.
+
+## Related Modules
+
+- **Customer** - Orders belong to customers, uses customer bonuses
+- **Catalog** - Order items reference products
+- **Seller** - Sellers fulfill orders

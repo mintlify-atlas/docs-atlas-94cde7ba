@@ -1,0 +1,423 @@
+---
+title: 'Categories'
+description: 'Browse and manage product categories'
+---
+
+## Get Parent Categories
+
+<api method="GET" path="/api/categories/parent" auth="none" />
+
+Retrieves all top-level (parent) categories.
+
+### Query Parameters
+
+<ParamField query="withCaching" type="boolean" default="true">
+  Enable caching for faster response
+</ParamField>
+
+### Response
+
+<ResponseField name="categories" type="array">
+  Array of parent category objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Categories retrieved successfully
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/categories/parent"
+```
+
+### Success Response
+
+```json
+[
+  {
+    "id": "parent-1",
+    "name": "Electronics",
+    "iconUrl": "https://cdn.example.com/icons/electronics.svg",
+    "childCount": 5
+  },
+  {
+    "id": "parent-2",
+    "name": "Clothing",
+    "iconUrl": "https://cdn.example.com/icons/clothing.svg",
+    "childCount": 8
+  }
+]
+```
+
+---
+
+## Get Child Categories by Parent
+
+<api method="GET" path="/api/categories/child/{parentId}" auth="none" />
+
+Retrieves all child categories under a specific parent category.
+
+### Path Parameters
+
+<ParamField path="parentId" type="string (uuid)" required>
+  Parent category identifier
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="withCaching" type="boolean" default="true">
+  Enable caching for faster response
+</ParamField>
+
+### Response
+
+<ResponseField name="categories" type="array">
+  Array of child category objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Categories retrieved
+- `404 Not Found` - Parent category not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/categories/child/parent-1"
+```
+
+### Success Response
+
+```json
+[
+  {
+    "id": "child-1",
+    "name": "Smartphones",
+    "parentId": "parent-1",
+    "parentName": "Electronics",
+    "imageUrl": "https://cdn.example.com/categories/smartphones.jpg",
+    "productCount": 234
+  },
+  {
+    "id": "child-2",
+    "name": "Laptops",
+    "parentId": "parent-1",
+    "parentName": "Electronics",
+    "imageUrl": "https://cdn.example.com/categories/laptops.jpg",
+    "productCount": 156
+  }
+]
+```
+
+---
+
+## Get All Child Categories
+
+<api method="GET" path="/api/categories/child" auth="none" />
+
+Retrieves all child categories across all parent categories.
+
+### Response
+
+<ResponseField name="categories" type="array">
+  Array of all child category objects
+</ResponseField>
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/categories/child"
+```
+
+---
+
+## Get Category Attributes (Seller)
+
+<api method="GET" path="/api/categories/child/{childId}/attributes" auth="Seller" />
+
+Retrieves all attributes defined for a specific category. Sellers use this when creating products.
+
+### Path Parameters
+
+<ParamField path="childId" type="string (uuid)" required>
+  Child category identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="attributes" type="array">
+  Array of category attribute definitions
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Attributes retrieved
+- `404 Not Found` - Category not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/categories/child/child-1/attributes" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+[
+  {
+    "id": "attr-1",
+    "name": "Brand",
+    "type": "string",
+    "required": true
+  },
+  {
+    "id": "attr-2",
+    "name": "Color",
+    "type": "string",
+    "required": true
+  },
+  {
+    "id": "attr-3",
+    "name": "Storage",
+    "type": "string",
+    "required": false
+  }
+]
+```
+
+---
+
+## Get Category Attributes with Values
+
+<api method="GET" path="/api/categories/child/{childId}/attributes-with-values" auth="none" />
+
+Retrieves category attributes along with all unique values currently used by products. Useful for building filter UI.
+
+### Path Parameters
+
+<ParamField path="childId" type="string (uuid)" required>
+  Child category identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="attributes" type="array">
+  Array of attributes with their unique values
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Data retrieved
+- `400 Bad Request` - Invalid category ID
+- `404 Not Found` - Category not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/categories/child/child-1/attributes-with-values"
+```
+
+### Success Response
+
+```json
+[
+  {
+    "attributeName": "Brand",
+    "values": ["Apple", "Samsung", "Google", "OnePlus"]
+  },
+  {
+    "attributeName": "Color",
+    "values": ["Black", "White", "Blue", "Red"]
+  },
+  {
+    "attributeName": "Storage",
+    "values": ["64GB", "128GB", "256GB", "512GB"]
+  }
+]
+```
+
+---
+
+## Add Parent Category (Admin)
+
+<api method="POST" path="/api/categories" auth="Admin" />
+
+Creates a new parent category.
+
+### Request Body (multipart/form-data)
+
+<ParamField body="name" type="string" required>
+  Category name
+</ParamField>
+
+<ParamField body="icon" type="file" required>
+  Category icon image
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Category created
+- `400 Bad Request` - Invalid data
+- `409 Conflict` - Category name already exists
+
+### Example
+
+```bash cURL
+curl -X POST "https://your-server.com/api/categories" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "name=Sports & Outdoors" \
+  -F "icon=@/path/to/icon.svg"
+```
+
+---
+
+## Add Child Category (Admin)
+
+<api method="POST" path="/api/categories/{parentId}" auth="Admin" />
+
+Creates a new child category under a parent category.
+
+### Path Parameters
+
+<ParamField path="parentId" type="string (uuid)" required>
+  Parent category identifier
+</ParamField>
+
+### Request Body (multipart/form-data)
+
+<ParamField body="name" type="string" required>
+  Child category name
+</ParamField>
+
+<ParamField body="image" type="file" required>
+  Category image
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Child category created
+- `400 Bad Request` - Invalid data
+- `404 Not Found` - Parent category not found
+- `409 Conflict` - Child category name already exists under this parent
+
+### Example
+
+```bash cURL
+curl -X POST "https://your-server.com/api/categories/parent-1" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "name=Smartwatches" \
+  -F "image=@/path/to/category-image.jpg"
+```
+
+---
+
+## Update Parent Category (Admin)
+
+<api method="PATCH" path="/api/categories/{categoryId}" auth="Admin" />
+
+Updates a parent category.
+
+### Path Parameters
+
+<ParamField path="categoryId" type="string (uuid)" required>
+  Category identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string">
+  New category name (optional)
+</ParamField>
+
+### Response Codes
+
+- `200 OK` - Category updated, returns updated category object
+- `400 Bad Request` - Invalid data
+- `404 Not Found` - Category not found
+- `409 Conflict` - Name already exists
+
+---
+
+## Delete Category (Admin)
+
+<api method="DELETE" path="/api/categories/{categoryId}" auth="Admin" />
+
+Deletes a category (parent or child).
+
+### Path Parameters
+
+<ParamField path="categoryId" type="string (uuid)" required>
+  Category identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Category deleted
+- `404 Not Found` - Category not found
+
+### Example
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/categories/category-id" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+<Warning>
+  Deleting a parent category will also delete all its child categories and may affect existing products.
+</Warning>
+
+---
+
+## Add Category Attribute (Admin)
+
+<api method="POST" path="/api/categories/child/{childCategoryId}/attributes" auth="Admin" />
+
+Adds a new attribute to a child category.
+
+### Path Parameters
+
+<ParamField path="childCategoryId" type="string (uuid)" required>
+  Child category identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Attribute name (e.g., "Screen Size", "RAM")
+</ParamField>
+
+<ParamField body="required" type="boolean" required>
+  Whether this attribute is required for products in this category
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Attribute added
+- `400 Bad Request` - Invalid data
+- `404 Not Found` - Category not found
+- `409 Conflict` - Attribute already exists
+
+---
+
+## Delete Category Attribute (Admin)
+
+<api method="DELETE" path="/api/categories/child/{childCategoryId}/attributes/{attributeId}" auth="Admin" />
+
+Removes an attribute from a category.
+
+### Path Parameters
+
+<ParamField path="childCategoryId" type="string (uuid)" required>
+  Child category identifier
+</ParamField>
+
+<ParamField path="attributeId" type="string (uuid)" required>
+  Attribute identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Attribute deleted
+- `404 Not Found` - Category or attribute not found

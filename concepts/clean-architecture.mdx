@@ -1,0 +1,544 @@
+---
+title: Clean Architecture
+description: Understanding the layered architecture within each module
+---
+
+Each module in Wolfix.Server follows **Clean Architecture** (also known as Onion Architecture or Hexagonal Architecture) to maintain separation of concerns and testability.
+
+## The Layers
+
+Clean Architecture organizes code into concentric layers, with dependencies pointing inward:
+
+```
+┌────────────────────────────────────────┐
+│  Endpoints (HTTP API)                      │
+│  ┌─────────────────────────────────┐  │
+│  │  Infrastructure                  │  │
+│  │  (EF Core, HTTP, Azure)          │  │
+│  │  ┌─────────────────────────┐  │  │
+│  │  │  Application             │  │  │
+│  │  │  (Services, DTOs)        │  │  │
+│  │  │  ┌─────────────────┐  │  │  │
+│  │  │  │    Domain      │  │  │  │
+│  │  │  │  (Entities)  │  │  │  │
+│  │  │  └─────────────────┘  │  │  │
+│  │  └─────────────────────────┘  │  │
+│  └─────────────────────────────────┘  │
+└────────────────────────────────────────┘
+         Dependencies point inward →
+```
+
+### 1. Domain Layer (Core)
+
+The **innermost layer** contains pure business logic with **zero dependencies**.
+
+**Project:** `{Module}.Domain`
+
+**Responsibilities:**
+- Business entities and aggregates
+- Value objects
+- Domain services
+- Business rules and validation
+- Repository interfaces (contracts)
+
+**Example:** Product aggregate from Catalog module:
+
+```csharp Catalog.Domain/ProductAggregate/Product.cs
+using Shared.Domain.Entities;
+using Shared.Domain.Models;
+
+namespace Catalog.Domain.ProductAggregate;
+
+public sealed class Product : BaseEntity
+{
+    public string Title { get; private set; }
+    public string Description { get; private set; }
+    public decimal Price { get; private set; }
+    public ProductStatus Status { get; private set; }
+    public decimal FinalPrice { get; private set; }
+    public Guid SellerId { get; private set; }
+    
+    private readonly List<Review> _reviews = [];
+    public IReadOnlyCollection<ReviewInfo> Reviews => _reviews
+        .Select(r => (ReviewInfo)r)
+        .ToList()
+        .AsReadOnly();
+    
+    // Factory method with validation
+    public static Result<Product> Create(
+        string title, 
+        string description, 
+        decimal price, 
+        ProductStatus status, 
+        Guid categoryId, 
+        Guid sellerId)
+    {
+        if (IsTextInvalid(title, out string titleErrorMessage))
+            return Result<Product>.Failure(titleErrorMessage);
+
+        if (IsPriceInvalid(price, out string priceErrorMessage))
+            return Result<Product>.Failure(priceErrorMessage);
+
+        var product = new Product(title, description, price, status, categoryId, sellerId);
+        product.RecalculateBonuses();
+        product.FinalPrice = price;
+        
+        return Result<Product>.Success(product, HttpStatusCode.Created);
+    }
+    
+    // Business logic method
+    public VoidResult AddReview(string title, string text, uint rating, Guid customerId)
+    {
+        Result<Review> createReviewResult = Review.Create(title, text, rating, this, customerId);
+
+        return createReviewResult.Map(
+            onSuccess: review =>
+            {
+                _reviews.Add(review);
+                RecalculateAverageRating();
+                return VoidResult.Success();
+            },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage, createReviewResult.StatusCode)
+        );
+    }
+    
+    // Private validation
+    private static bool IsPriceInvalid(decimal price, out string errorMessage)
+    {
+        if (price <= 0)
+        {
+            errorMessage = $"{nameof(price)} must be positive";
+            return true;
+        }
+        
+        errorMessage = string.Empty;
+        return false;
+    }
+}
+```
+
+<Note>
+  The Domain layer has no dependencies on frameworks, databases, or external services. It's pure business logic.
+</Note>
+
+### 2. Application Layer
+
+The **orchestration layer** contains use cases and application services.
+
+**Project:** `{Module}.Application`
+
+**Responsibilities:**
+- Application services (use cases)
+- DTOs (Data Transfer Objects)
+- Mapping between domain and DTOs
+- Event handlers for integration events
+- Service interfaces
+
+**Example:** Product service:
+
+```csharp Catalog.Application/Services/ProductService.cs
+public class ProductService
+{
+    private readonly IProductRepository _productRepository;
+    private readonly ICategoryRepository _categoryRepository;
+    private readonly IToxicityService _toxicityService;
+    
+    public async Task<Result<ProductDto>> CreateProductAsync(
+        CreateProductDto dto, 
+        Guid sellerId, 
+        CancellationToken ct)
+    {
+        // 1. Validate category exists
+        var categoryExists = await _categoryRepository.ExistsAsync(dto.CategoryId, ct);
+        if (!categoryExists)
+            return Result<ProductDto>.Failure("Category not found", HttpStatusCode.NotFound);
+        
+        // 2. Check for toxic content
+        Result<bool> toxicityResult = await _toxicityService.IsToxic(dto.Title, ct);
+        if (toxicityResult.IsSuccess && toxicityResult.Value)
+            return Result<ProductDto>.Failure("Title contains inappropriate content");
+        
+        // 3. Create domain entity
+        Result<Product> createResult = Product.Create(
+            dto.Title,
+            dto.Description,
+            dto.Price,
+            ProductStatus.Draft,
+            dto.CategoryId,
+            sellerId
+        );
+        
+        if (createResult.IsFailure)
+            return Result<ProductDto>.Failure(createResult);
+        
+        Product product = createResult.Value!;
+        
+        // 4. Save to repository
+        await _productRepository.AddAsync(product, ct);
+        await _productRepository.SaveChangesAsync(ct);
+        
+        // 5. Map to DTO
+        ProductDto productDto = product.ToDto();
+        
+        return Result<ProductDto>.Success(productDto, HttpStatusCode.Created);
+    }
+}
+```
+
+**DTOs:**
+
+```csharp Catalog.Application/Dto/CreateProductDto.cs
+public record CreateProductDto(
+    string Title,
+    string Description,
+    decimal Price,
+    Guid CategoryId
+);
+
+public record ProductDto(
+    Guid Id,
+    string Title,
+    string Description,
+    decimal Price,
+    decimal FinalPrice,
+    string Status,
+    Guid SellerId
+);
+```
+
+### 3. Infrastructure Layer
+
+The **implementation layer** for external concerns.
+
+**Project:** `{Module}.Infrastructure`
+
+**Responsibilities:**
+- Repository implementations (EF Core)
+- Database context and configurations
+- Migrations
+- External service implementations (HTTP, Azure, etc.)
+- Third-party integrations
+
+**Example:** Repository implementation:
+
+```csharp Catalog.Infrastructure/Repositories/ProductRepository.cs
+using Catalog.Domain.Interfaces;
+using Catalog.Domain.ProductAggregate;
+using Microsoft.EntityFrameworkCore;
+
+public class ProductRepository : IProductRepository
+{
+    private readonly CatalogDbContext _context;
+    
+    public ProductRepository(CatalogDbContext context)
+    {
+        _context = context;
+    }
+    
+    public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        return await _context.Products
+            .Include(p => p.Reviews)
+            .Include(p => p.ProductMedias)
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
+    }
+    
+    public async Task AddAsync(Product product, CancellationToken ct)
+    {
+        await _context.Products.AddAsync(product, ct);
+    }
+    
+    public async Task SaveChangesAsync(CancellationToken ct)
+    {
+        await _context.SaveChangesAsync(ct);
+    }
+}
+```
+
+**DbContext:**
+
+```csharp Catalog.Infrastructure/CatalogDbContext.cs
+public class CatalogDbContext : DbContext
+{
+    public DbSet<Product> Products { get; set; }
+    public DbSet<Category> Categories { get; set; }
+    
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+    }
+}
+```
+
+**Entity Configuration:**
+
+```csharp Catalog.Infrastructure/Configurations/ProductConfiguration.cs
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+    public void Configure(EntityTypeBuilder<Product> builder)
+    {
+        builder.ToTable("catalog_products");
+        
+        builder.HasKey(p => p.Id);
+        
+        builder.Property(p => p.Title)
+            .IsRequired()
+            .HasMaxLength(200);
+        
+        builder.Property(p => p.Price)
+            .HasPrecision(18, 2);
+        
+        // Configure relationships
+        builder.HasMany(p => p.Reviews)
+            .WithOne()
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+```
+
+**External Service:**
+
+```csharp Catalog.Infrastructure/Services/ToxicityService.cs
+using Catalog.Application.Contracts;
+
+internal sealed class ToxicityService : IToxicityService
+{
+    private readonly HttpClient _httpClient;
+    
+    public ToxicityService(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
+    
+    public async Task<Result<bool>> IsToxic(string text, CancellationToken ct)
+    {
+        try
+        {
+            var payload = new { text };
+            var response = await _httpClient.PostAsJsonAsync("check", payload, ct);
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<bool>(ct);
+            
+            return Result<bool>.Success(result);
+        }
+        catch (Exception ex)
+        {
+            return Result<bool>.Failure(ex.Message);
+        }
+    }
+}
+```
+
+### 4. Endpoints Layer (Presentation)
+
+The **HTTP API layer** using ASP.NET Core Minimal APIs.
+
+**Project:** `{Module}.Endpoints`
+
+**Responsibilities:**
+- HTTP endpoints
+- Request/response models
+- Authorization policies
+- Endpoint registration
+
+**Example:** Product endpoints:
+
+```csharp Catalog.Endpoints/Endpoints/ProductEndpoints.cs
+public static class ProductEndpoints
+{
+    public static IEndpointRouteBuilder MapProductEndpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/api/products")
+            .WithTags("Products");
+        
+        group.MapPost("/", CreateProduct)
+            .RequireAuthorization("Seller");
+        
+        group.MapGet("/{id:guid}", GetProduct);
+        
+        group.MapPut("/{id:guid}", UpdateProduct)
+            .RequireAuthorization("Seller");
+        
+        group.MapDelete("/{id:guid}", DeleteProduct)
+            .RequireAuthorization("Admin");
+        
+        return app;
+    }
+    
+    private static async Task<IResult> CreateProduct(
+        [FromBody] CreateProductDto dto,
+        [FromServices] ProductService productService,
+        ClaimsPrincipal user,
+        CancellationToken ct)
+    {
+        var sellerId = Guid.Parse(user.FindFirst("ProfileId")!.Value);
+        
+        var result = await productService.CreateProductAsync(dto, sellerId, ct);
+        
+        return result.IsSuccess
+            ? Results.Created($"/api/products/{result.Value!.Id}", result.Value)
+            : Results.BadRequest(result.ErrorMessage);
+    }
+    
+    private static async Task<IResult> GetProduct(
+        Guid id,
+        [FromServices] ProductService productService,
+        CancellationToken ct)
+    {
+        var result = await productService.GetProductByIdAsync(id, ct);
+        
+        return result.IsSuccess
+            ? Results.Ok(result.Value)
+            : Results.NotFound(result.ErrorMessage);
+    }
+}
+```
+
+## Dependency Direction
+
+The **Dependency Rule**: Dependencies point **inward** only.
+
+```
+Endpoints → Application → Domain
+    ↑
+    │
+Infrastructure
+```
+
+- **Domain** has no dependencies
+- **Application** depends on Domain only
+- **Infrastructure** depends on Domain and Application
+- **Endpoints** depends on Application
+
+<Warning>
+  Never let the Domain layer depend on Application or Infrastructure. This keeps business logic pure and testable.
+</Warning>
+
+## Dependency Inversion
+
+The Domain defines **interfaces**, Infrastructure provides **implementations**:
+
+```csharp Catalog.Domain/Interfaces/IProductRepository.cs
+// Domain defines the contract
+public interface IProductRepository
+{
+    Task<Product?> GetByIdAsync(Guid id, CancellationToken ct);
+    Task AddAsync(Product product, CancellationToken ct);
+    Task SaveChangesAsync(CancellationToken ct);
+}
+```
+
+```csharp Catalog.Infrastructure/Repositories/ProductRepository.cs
+// Infrastructure implements the contract
+public class ProductRepository : IProductRepository
+{
+    // Implementation using EF Core
+}
+```
+
+Registration in DI container:
+
+```csharp
+services.AddScoped<IProductRepository, ProductRepository>();
+```
+
+## Benefits
+
+<CardGroup cols={2}>
+  <Card title="Testability" icon="vial">
+    Business logic is isolated and easy to unit test
+  </Card>
+  
+  <Card title="Independence" icon="puzzle-piece">
+    Domain logic doesn't depend on frameworks or databases
+  </Card>
+  
+  <Card title="Flexibility" icon="wrench">
+    Swap implementations (e.g., EF Core to Dapper) without changing business logic
+  </Card>
+  
+  <Card title="Maintainability" icon="screwdriver-wrench">
+    Clear separation makes code easier to understand and modify
+  </Card>
+</CardGroup>
+
+## Testing Strategy
+
+### Unit Tests (Domain)
+
+Test business logic in isolation:
+
+```csharp Catalog.Tests/Domain/ProductTests.cs
+public class ProductTests
+{
+    [Fact]
+    public void Create_WithValidData_ShouldSucceed()
+    {
+        // Arrange
+        var title = "Test Product";
+        var description = "Description";
+        var price = 99.99m;
+        
+        // Act
+        var result = Product.Create(title, description, price, 
+            ProductStatus.Draft, Guid.NewGuid(), Guid.NewGuid());
+        
+        // Assert
+        Assert.True(result.IsSuccess);
+        Assert.Equal(title, result.Value!.Title);
+        Assert.Equal(price, result.Value.Price);
+    }
+    
+    [Fact]
+    public void Create_WithNegativePrice_ShouldFail()
+    {
+        // Act
+        var result = Product.Create("Test", "Desc", -10m, 
+            ProductStatus.Draft, Guid.NewGuid(), Guid.NewGuid());
+        
+        // Assert
+        Assert.True(result.IsFailure);
+        Assert.Contains("must be positive", result.ErrorMessage);
+    }
+}
+```
+
+### Integration Tests (Application)
+
+Test use cases with mocked infrastructure:
+
+```csharp Catalog.Tests/Application/ProductServiceTests.cs
+public class ProductServiceTests
+{
+    [Fact]
+    public async Task CreateProduct_WithToxicTitle_ShouldFail()
+    {
+        // Arrange
+        var mockRepo = new Mock<IProductRepository>();
+        var mockToxicity = new Mock<IToxicityService>();
+        mockToxicity.Setup(x => x.IsToxic(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<bool>.Success(true));
+        
+        var service = new ProductService(mockRepo.Object, mockToxicity.Object);
+        
+        // Act
+        var result = await service.CreateProductAsync(new CreateProductDto(...), Guid.NewGuid(), CancellationToken.None);
+        
+        // Assert
+        Assert.True(result.IsFailure);
+        Assert.Contains("inappropriate content", result.ErrorMessage);
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Domain-Driven Design" icon="brain" href="/concepts/domain-driven-design">
+    Deep dive into DDD patterns used in the Domain layer
+  </Card>
+  
+  <Card title="Result Pattern" icon="check-circle" href="/concepts/result-pattern">
+    Learn about error handling in Wolfix.Server
+  </Card>
+</CardGroup>

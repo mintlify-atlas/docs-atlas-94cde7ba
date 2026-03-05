@@ -1,0 +1,597 @@
+---
+title: Domain-Driven Design
+description: DDD patterns and practices in Wolfix.Server
+---
+
+Wolfix.Server applies **Domain-Driven Design (DDD)** principles to create a rich domain model that encapsulates business logic and enforces business rules.
+
+## Core DDD Concepts
+
+Domain-Driven Design provides tactical patterns for organizing business logic:
+
+<CardGroup cols={2}>
+  <Card title="Entities" icon="cube">
+    Objects with identity that persist over time
+  </Card>
+  
+  <Card title="Value Objects" icon="gem">
+    Immutable objects defined by their attributes
+  </Card>
+  
+  <Card title="Aggregates" icon="cubes">
+    Clusters of entities with consistency boundaries
+  </Card>
+  
+  <Card title="Domain Services" icon="cogs">
+    Operations that don't belong to a single entity
+  </Card>
+  
+  <Card title="Repositories" icon="database">
+    Abstractions for data persistence
+  </Card>
+  
+  <Card title="Domain Events" icon="bell">
+    Events representing business facts
+  </Card>
+</CardGroup>
+
+## Entities
+
+Entities have **unique identity** and **mutable state**. Two entities with the same attributes but different IDs are different.
+
+### Base Entity
+
+All entities inherit from `BaseEntity`:
+
+```csharp Shared.Domain/Entities/BaseEntity.cs
+namespace Shared.Domain.Entities;
+
+public abstract class BaseEntity
+{
+    public Guid Id { get; private set; }
+}
+```
+
+<Note>
+  The `Id` has a private setter to prevent external modification, ensuring identity immutability.
+</Note>
+
+### Entity Example: Review
+
+```csharp Catalog.Domain/ProductAggregate/Entities/Review.cs
+public sealed class Review : BaseEntity
+{
+    public string Title { get; private set; }
+    public string Text { get; private set; }
+    public uint Rating { get; private set; }
+    public Guid CustomerId { get; private set; }
+    public Product Product { get; private set; }
+    
+    // Private constructor - use factory method
+    private Review() { }
+    
+    // Factory method with validation
+    public static Result<Review> Create(
+        string title, 
+        string text, 
+        uint rating, 
+        Product product, 
+        Guid customerId)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return Result<Review>.Failure("Title is required");
+        
+        if (string.IsNullOrWhiteSpace(text))
+            return Result<Review>.Failure("Text is required");
+        
+        if (rating < 1 || rating > 5)
+            return Result<Review>.Failure("Rating must be between 1 and 5");
+        
+        if (customerId == Guid.Empty)
+            return Result<Review>.Failure("Customer ID is required");
+        
+        var review = new Review
+        {
+            Title = title,
+            Text = text,
+            Rating = rating,
+            Product = product,
+            CustomerId = customerId
+        };
+        
+        return Result<Review>.Success(review, HttpStatusCode.Created);
+    }
+    
+    // Behavior methods
+    public VoidResult SetTitle(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return VoidResult.Failure("Title is required");
+        
+        Title = title;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult SetRating(uint rating)
+    {
+        if (rating < 1 || rating > 5)
+            return VoidResult.Failure("Rating must be between 1 and 5");
+        
+        Rating = rating;
+        return VoidResult.Success();
+    }
+}
+```
+
+<Info>
+  Entities protect their invariants through:
+  - Private setters
+  - Factory methods with validation
+  - Behavior methods that enforce rules
+</Info>
+
+## Value Objects
+
+Value Objects are **immutable** and defined by their **attributes**, not identity. Two value objects with identical attributes are considered equal.
+
+### Value Object Example: Email
+
+```csharp Shared.Domain/ValueObjects/Email.cs
+public sealed record Email
+{
+    public string Value { get; init; }
+    
+    private Email(string value)
+    {
+        Value = value;
+    }
+    
+    public static Result<Email> Create(string email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return Result<Email>.Failure("Email is required");
+        
+        if (!IsValidEmail(email))
+            return Result<Email>.Failure("Invalid email format");
+        
+        return Result<Email>.Success(new Email(email.ToLowerInvariant()));
+    }
+    
+    private static bool IsValidEmail(string email)
+    {
+        try
+        {
+            var addr = new System.Net.Mail.MailAddress(email);
+            return addr.Address == email;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    
+    public override string ToString() => Value;
+}
+```
+
+### Value Object Example: Address
+
+```csharp Shared.Domain/ValueObjects/Address.cs
+public sealed record Address
+{
+    public string Street { get; init; }
+    public string City { get; init; }
+    public string State { get; init; }
+    public string ZipCode { get; init; }
+    public string Country { get; init; }
+    
+    private Address() { }
+    
+    public static Result<Address> Create(
+        string street, 
+        string city, 
+        string state, 
+        string zipCode, 
+        string country)
+    {
+        if (string.IsNullOrWhiteSpace(street))
+            return Result<Address>.Failure("Street is required");
+        
+        if (string.IsNullOrWhiteSpace(city))
+            return Result<Address>.Failure("City is required");
+        
+        // Additional validation...
+        
+        return Result<Address>.Success(new Address
+        {
+            Street = street,
+            City = city,
+            State = state,
+            ZipCode = zipCode,
+            Country = country
+        });
+    }
+}
+```
+
+<Tip>
+  Use C# `record` types for value objects - they provide value-based equality by default.
+</Tip>
+
+## Aggregates
+
+Aggregates are **clusters of entities and value objects** with a clear **consistency boundary**. Each aggregate has one **Aggregate Root** that controls access.
+
+### Key Rules
+
+1. **External access only through the root**
+2. **Aggregate root enforces invariants**
+3. **One aggregate per transaction**
+4. **Aggregates reference each other by ID, not object reference**
+
+### Aggregate Example: Product
+
+```csharp Catalog.Domain/ProductAggregate/Product.cs
+public sealed class Product : BaseEntity // Aggregate Root
+{
+    // Properties
+    public string Title { get; private set; }
+    public decimal Price { get; private set; }
+    public decimal FinalPrice { get; private set; }
+    public double? AverageRating { get; private set; }
+    
+    // Child entities - private backing field, public read-only access
+    private readonly List<Review> _reviews = [];
+    public IReadOnlyCollection<ReviewInfo> Reviews => _reviews
+        .Select(r => (ReviewInfo)r)
+        .ToList()
+        .AsReadOnly();
+    
+    private readonly List<ProductMedia> _productMedias = [];
+    public IReadOnlyCollection<ProductMediaInfo> ProductMedias => _productMedias
+        .Select(pm => (ProductMediaInfo)pm)
+        .ToList()
+        .AsReadOnly();
+    
+    // Factory method
+    public static Result<Product> Create(
+        string title, 
+        string description, 
+        decimal price, 
+        ProductStatus status, 
+        Guid categoryId, 
+        Guid sellerId)
+    {
+        // Validation logic...
+        
+        var product = new Product(title, description, price, status, categoryId, sellerId);
+        product.RecalculateBonuses();
+        product.FinalPrice = price;
+        
+        return Result<Product>.Success(product, HttpStatusCode.Created);
+    }
+    
+    // Aggregate operations that maintain consistency
+    public VoidResult AddReview(string title, string text, uint rating, Guid customerId)
+    {
+        Result<Review> createReviewResult = Review.Create(title, text, rating, this, customerId);
+
+        return createReviewResult.Map(
+            onSuccess: review =>
+            {
+                _reviews.Add(review);
+                RecalculateAverageRating(); // Maintain aggregate invariant
+                return VoidResult.Success();
+            },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage, createReviewResult.StatusCode)
+        );
+    }
+    
+    public VoidResult RemoveReview(Guid reviewId)
+    {
+        Review? review = _reviews.FirstOrDefault(r => r.Id == reviewId);
+
+        if (review == null)
+            return VoidResult.Failure("Review not found", HttpStatusCode.NotFound);
+        
+        _reviews.Remove(review);
+        RecalculateAverageRating(); // Maintain aggregate invariant
+        return VoidResult.Success();
+    }
+    
+    public VoidResult ChangePrice(decimal price)
+    {
+        if (price <= 0)
+            return VoidResult.Failure("Price must be positive");
+        
+        Price = price;
+        RecalculateFinalPrice(); // Recalculate based on discount
+        RecalculateBonuses(); // Recalculate bonus points
+        
+        return VoidResult.Success();
+    }
+    
+    // Private methods that maintain invariants
+    private void RecalculateAverageRating()
+    {
+        AverageRating = _reviews.Count == 0
+            ? null
+            : Math.Round(_reviews.Average(r => r.Rating), MidpointRounding.AwayFromZero);
+    }
+    
+    private void RecalculateFinalPrice()
+    {
+        if (Discount == null || Discount.Status == DiscountStatus.Expired)
+        {
+            FinalPrice = Price;
+            return;
+        }
+        
+        FinalPrice = Price * (100 - Discount.Percent) / 100;
+    }
+    
+    private void RecalculateBonuses()
+    {
+        Bonuses = (uint)Math.Round(Price * BonusPercent);
+    }
+}
+```
+
+<Warning>
+  Never expose child entities directly. Always use the aggregate root to modify children, ensuring invariants are maintained.
+</Warning>
+
+### Aggregate Boundaries
+
+Each aggregate is a **transaction boundary**. In Wolfix.Server:
+
+- **Product Aggregate**: Product, Review, ProductMedia, Discount
+- **Order Aggregate**: Order, OrderItem, Delivery
+- **Category Aggregate**: Category, CategoryAttribute, CategoryVariant
+- **Customer Aggregate**: Customer (single entity aggregate)
+- **Seller Aggregate**: Seller, SellerApplication
+
+## Repositories
+
+Repositories provide an abstraction over data persistence for **aggregate roots only**.
+
+### Repository Interface (Domain)
+
+```csharp Catalog.Domain/Interfaces/IProductRepository.cs
+public interface IProductRepository
+{
+    Task<Product?> GetByIdAsync(Guid id, CancellationToken ct);
+    Task<List<Product>> GetByCategoryIdAsync(Guid categoryId, CancellationToken ct);
+    Task<bool> ExistsAsync(Guid id, CancellationToken ct);
+    Task AddAsync(Product product, CancellationToken ct);
+    Task UpdateAsync(Product product, CancellationToken ct);
+    Task DeleteAsync(Product product, CancellationToken ct);
+    Task SaveChangesAsync(CancellationToken ct);
+}
+```
+
+### Repository Implementation (Infrastructure)
+
+```csharp Catalog.Infrastructure/Repositories/ProductRepository.cs
+public class ProductRepository : IProductRepository
+{
+    private readonly CatalogDbContext _context;
+    
+    public ProductRepository(CatalogDbContext context)
+    {
+        _context = context;
+    }
+    
+    public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        return await _context.Products
+            .Include(p => p.Reviews) // Load child entities
+            .Include(p => p.ProductMedias)
+            .Include(p => p.Discount)
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
+    }
+    
+    public async Task AddAsync(Product product, CancellationToken ct)
+    {
+        await _context.Products.AddAsync(product, ct);
+    }
+    
+    public async Task SaveChangesAsync(CancellationToken ct)
+    {
+        await _context.SaveChangesAsync(ct);
+    }
+}
+```
+
+<Note>
+  Repositories work with aggregate roots only. You never have a `ReviewRepository` - reviews are accessed through `Product`.
+</Note>
+
+## Domain Services
+
+Domain services encapsulate **business logic that doesn't naturally fit in an entity**.
+
+### When to Use Domain Services
+
+- Operation involves multiple aggregates
+- Stateless operations
+- Complex calculations or algorithms
+- Business rules that span entities
+
+### Example: Price Calculation Service
+
+```csharp Catalog.Domain/Services/PriceCalculationService.cs
+public class PriceCalculationService
+{
+    public decimal CalculateFinalPrice(decimal basePrice, Discount? discount, decimal taxRate)
+    {
+        decimal price = basePrice;
+        
+        // Apply discount
+        if (discount != null && discount.Status == DiscountStatus.Active)
+        {
+            price = price * (100 - discount.Percent) / 100;
+        }
+        
+        // Apply tax
+        price = price * (1 + taxRate);
+        
+        return Math.Round(price, 2);
+    }
+    
+    public bool IsEligibleForDiscount(Product product, Customer customer)
+    {
+        // Complex business rule spanning multiple aggregates
+        if (customer.MembershipLevel == MembershipLevel.Premium)
+            return true;
+        
+        if (product.Price > 100 && customer.TotalPurchases > 5)
+            return true;
+        
+        return false;
+    }
+}
+```
+
+## Encapsulation Patterns
+
+### Private Constructors
+
+Force use of factory methods:
+
+```csharp
+private Product() { } // For EF Core
+
+private Product(string title, decimal price, ...)
+{
+    Title = title;
+    Price = price;
+}
+
+public static Result<Product> Create(...) // Only way to create
+{
+    // Validation
+    return Result<Product>.Success(new Product(...));
+}
+```
+
+### Private Setters
+
+Prevent direct property modification:
+
+```csharp
+public string Title { get; private set; }
+public decimal Price { get; private set; }
+
+// Use methods to change properties
+public VoidResult ChangeTitle(string title)
+{
+    // Validation
+    Title = title;
+    return VoidResult.Success();
+}
+```
+
+### Collection Encapsulation
+
+Expose read-only collections:
+
+```csharp
+private readonly List<Review> _reviews = [];
+
+public IReadOnlyCollection<ReviewInfo> Reviews => _reviews
+    .Select(r => (ReviewInfo)r)
+    .ToList()
+    .AsReadOnly();
+
+public VoidResult AddReview(...) // Only way to add
+{
+    // Business logic
+    _reviews.Add(review);
+    return VoidResult.Success();
+}
+```
+
+## Rich vs Anemic Domain Model
+
+### Anemic (Anti-pattern)
+
+```csharp
+// ❌ BAD: Anemic domain model - just data bags
+public class Product
+{
+    public Guid Id { get; set; }
+    public string Title { get; set; }
+    public decimal Price { get; set; }
+    public List<Review> Reviews { get; set; }
+}
+
+// Business logic in service layer
+public class ProductService
+{
+    public void AddReview(Product product, string title, string text)
+    {
+        var review = new Review { Title = title, Text = text };
+        product.Reviews.Add(review);
+    }
+}
+```
+
+### Rich Domain Model (Correct)
+
+```csharp
+// ✅ GOOD: Rich domain model - encapsulated business logic
+public class Product : BaseEntity
+{
+    private readonly List<Review> _reviews = [];
+    public IReadOnlyCollection<ReviewInfo> Reviews => /* ... */;
+    
+    public VoidResult AddReview(string title, string text, uint rating, Guid customerId)
+    {
+        Result<Review> createResult = Review.Create(title, text, rating, this, customerId);
+        
+        if (createResult.IsFailure)
+            return VoidResult.Failure(createResult);
+        
+        _reviews.Add(createResult.Value!);
+        RecalculateAverageRating(); // Maintain invariants
+        return VoidResult.Success();
+    }
+}
+```
+
+<Info>
+  In a rich domain model, entities contain both data AND behavior. Business rules are enforced by the domain, not scattered in services.
+</Info>
+
+## Benefits of DDD in Wolfix.Server
+
+<CardGroup cols={2}>
+  <Card title="Business Logic Centralization" icon="brain">
+    All business rules in one place - the domain
+  </Card>
+  
+  <Card title="Type Safety" icon="shield">
+    Compile-time guarantees for business rules
+  </Card>
+  
+  <Card title="Testability" icon="vial">
+    Easy to unit test domain logic in isolation
+  </Card>
+  
+  <Card title="Maintainability" icon="wrench">
+    Changes to business logic stay in the domain
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Result Pattern" icon="check-circle" href="/concepts/result-pattern">
+    Learn how DDD integrates with the Result pattern
+  </Card>
+  
+  <Card title="Development Guide" icon="code" href="/guides/development">
+    Start building your own domain models
+  </Card>
+</CardGroup>

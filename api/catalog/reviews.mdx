@@ -1,0 +1,306 @@
+---
+title: 'Product Reviews'
+description: 'Manage and view product reviews and ratings'
+---
+
+## Get Product Reviews
+
+<api method="GET" path="/api/products/{productId}/reviews" auth="none" />
+
+Retrieves customer reviews for a specific product with cursor-based pagination.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="10">
+  Number of reviews per page (default: 10)
+</ParamField>
+
+<ParamField query="lastId" type="string (uuid)">
+  ID of the last review from previous page (for cursor pagination)
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of review objects
+</ResponseField>
+
+<ResponseField name="hasMore" type="boolean">
+  Whether more reviews are available
+</ResponseField>
+
+<ResponseField name="lastId" type="string (uuid)">
+  ID of the last review in this page (use for next request)
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Reviews retrieved successfully
+- `404 Not Found` - Product not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+# First page
+curl -X GET "https://your-server.com/api/products/3fa85f64-5717-4562-b3fc-2c963f66afa6/reviews?pageSize=10"
+
+# Subsequent pages
+curl -X GET "https://your-server.com/api/products/3fa85f64-5717-4562-b3fc-2c963f66afa6/reviews?pageSize=10&lastId=last-review-id"
+```
+
+```javascript JavaScript
+// Fetch first page of reviews
+const response = await fetch(
+  `https://your-server.com/api/products/${productId}/reviews?pageSize=10`
+);
+const data = await response.json();
+
+console.log('Reviews:', data.items);
+console.log('Has more:', data.hasMore);
+
+// Fetch next page
+if (data.hasMore) {
+  const nextPage = await fetch(
+    `https://your-server.com/api/products/${productId}/reviews?pageSize=10&lastId=${data.lastId}`
+  );
+  const nextData = await nextPage.json();
+}
+```
+
+```python Python
+import requests
+
+# First page
+response = requests.get(
+    f'https://your-server.com/api/products/{product_id}/reviews',
+    params={'pageSize': 10}
+)
+data = response.json()
+
+print(f"Reviews: {data['items']}")
+print(f"Has more: {data['hasMore']}")
+
+# Next page
+if data['hasMore']:
+    next_response = requests.get(
+        f'https://your-server.com/api/products/{product_id}/reviews',
+        params={'pageSize': 10, 'lastId': data['lastId']}
+    )
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+{
+  "items": [
+    {
+      "id": "review-1",
+      "customerId": "customer-uuid",
+      "customerName": "John Doe",
+      "rating": 5,
+      "comment": "Excellent product! Highly recommended.",
+      "createdAt": "2024-01-15T10:30:00Z",
+      "verifiedPurchase": true
+    },
+    {
+      "id": "review-2",
+      "customerId": "customer-uuid-2",
+      "customerName": "Jane Smith",
+      "rating": 4,
+      "comment": "Good quality, fast shipping.",
+      "createdAt": "2024-01-14T15:20:00Z",
+      "verifiedPurchase": true
+    }
+  ],
+  "hasMore": true,
+  "lastId": "review-2"
+}
+```
+
+---
+
+## Add Product Review (Customer)
+
+<api method="POST" path="/api/products/{productId}/reviews" auth="Customer" />
+
+Submits a new review for a product. Customers can only review products they have purchased.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="customerId" type="string (uuid)" required>
+  Customer identifier (must match authenticated user)
+</ParamField>
+
+<ParamField body="rating" type="integer" required>
+  Rating from 1 to 5 stars
+</ParamField>
+
+<ParamField body="comment" type="string" required>
+  Review text/comment (minimum length may apply)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Review added successfully
+- `400 Bad Request` - Invalid rating or comment, or customer hasn't purchased product
+- `404 Not Found` - Product or customer not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/products/3fa85f64-5717-4562-b3fc-2c963f66afa6/reviews" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "customer-uuid",
+    "rating": 5,
+    "comment": "Amazing product! Exceeded my expectations. The quality is top-notch and delivery was fast."
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/products/${productId}/reviews`,
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      customerId: customerId,
+      rating: 5,
+      comment: 'Amazing product! Exceeded my expectations.'
+    })
+  }
+);
+
+if (response.status === 204) {
+  console.log('Review submitted successfully');
+}
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    f'https://your-server.com/api/products/{product_id}/reviews',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    json={
+        'customerId': customer_id,
+        'rating': 5,
+        'comment': 'Amazing product! Exceeded my expectations.'
+    }
+)
+
+if response.status_code == 204:
+    print('Review submitted successfully')
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("Authorization", $"Bearer {jwtToken}");
+
+var review = new {
+    CustomerId = customerId,
+    Rating = 5,
+    Comment = "Amazing product! Exceeded my expectations."
+};
+
+var response = await client.PostAsJsonAsync(
+    $"https://your-server.com/api/products/{productId}/reviews",
+    review
+);
+
+if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+{
+    Console.WriteLine("Review submitted successfully");
+}
+```
+
+</CodeGroup>
+
+### Error Response Examples
+
+**Invalid Rating (400 Bad Request):**
+```json
+"Rating must be between 1 and 5"
+```
+
+**Not Purchased (400 Bad Request):**
+```json
+"You can only review products you have purchased"
+```
+
+**Product Not Found (404 Not Found):**
+```json
+"Product not found"
+```
+
+**Duplicate Review (400 Bad Request):**
+```json
+"You have already reviewed this product"
+```
+
+## Review Guidelines
+
+### Rating System
+
+- **5 Stars** - Excellent, highly recommended
+- **4 Stars** - Very good, minor issues
+- **3 Stars** - Good, meets expectations
+- **2 Stars** - Below expectations
+- **1 Star** - Poor quality or experience
+
+### Review Requirements
+
+<Info>
+  Only customers who have purchased the product can submit reviews. This ensures authentic feedback from verified buyers.
+</Info>
+
+<Warning>
+  Reviews should be honest and follow community guidelines. Inappropriate content may be removed by administrators.
+</Warning>
+
+### Best Practices
+
+1. **Be Specific** - Mention specific features or aspects of the product
+2. **Be Honest** - Share both positives and negatives
+3. **Be Helpful** - Help other customers make informed decisions
+4. **Be Respectful** - Avoid offensive language or personal attacks
+
+## Review Policies
+
+- Customers can only submit one review per product
+- Reviews cannot be edited after submission (contact support for changes)
+- Verified purchase badge indicates the reviewer bought the product
+- Reviews may be moderated for quality and appropriateness
+
+## Review Metrics
+
+Product ratings are calculated as:
+- **Average Rating** - Mean of all review ratings
+- **Review Count** - Total number of reviews
+- **Rating Distribution** - Breakdown by star rating (1-5)
+
+These metrics appear on product detail pages to help customers make informed decisions.

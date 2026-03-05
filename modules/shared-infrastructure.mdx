@@ -1,0 +1,526 @@
+---
+title: 'Shared.Infrastructure'
+description: 'Shared infrastructure components: base repositories and value generators'
+icon: 'database'
+---
+
+## Overview
+
+The **Shared.Infrastructure** module contains common infrastructure implementations used across all business modules. It provides base repository implementations, EF Core utilities, and database configuration abstractions.
+
+## Components
+
+### Base Repository Implementation
+
+Concrete implementation of `IBaseRepository<TEntity>` used by all modules:
+
+```csharp Repositories/BaseRepository.cs
+using System.Linq.Expressions;
+using Microsoft.EntityFrameworkCore;
+using Shared.Domain.Entities;
+using Shared.Domain.Interfaces;
+
+namespace Shared.Infrastructure.Repositories;
+
+public class BaseRepository<TContext, TEntity> : IBaseRepository<TEntity>
+    where TEntity : BaseEntity
+    where TContext : DbContext
+{
+    private readonly DbSet<TEntity> _dbSet;
+    private readonly TContext _context;
+    
+    public BaseRepository(TContext context)
+    {
+        _context = context;
+        _dbSet = context.Set<TEntity>();
+    }
+    
+    public async Task<bool> IsExistAsync(Guid id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        return await _dbSet
+            .AsNoTracking()
+            .AnyAsync(e => e.Id == id, cancellationToken);
+    }
+    
+    public async Task AddAsync(TEntity entity, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _dbSet.AddAsync(entity, cancellationToken);
+    }
+    
+    public void Update(TEntity entity, Action actionUpdate, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        _dbSet.Update(entity);
+        actionUpdate.Invoke();
+    }
+    
+    public void Delete(TEntity entity, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _dbSet.Remove(entity);
+    }
+    
+    public async Task<TEntity?> GetByIdAsync(
+        Guid id,
+        CancellationToken cancellationToken,
+        params string[]? includeProperties)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        IQueryable<TEntity> query = _dbSet;
+        
+        if (includeProperties is not null)
+        {
+            foreach (string includeProperty in includeProperties)
+            {
+                query = query.Include(includeProperty);
+            }
+        }
+        
+        return await query.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+    }
+    
+    public async Task<TEntity?> GetByIdAsNoTrackingAsync(
+        Guid id,
+        CancellationToken cancellationToken,
+        params string[]? includeProperties)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        IQueryable<TEntity> query = _dbSet.AsNoTracking();
+        
+        if (includeProperties is not null)
+        {
+            foreach (string includeProperty in includeProperties)
+            {
+                query = query.Include(includeProperty);
+            }
+        }
+        
+        return await query
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+    }
+    
+    public async Task ExecuteDeleteAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _dbSet.ExecuteDeleteAsync(cancellationToken);
+    }
+    
+    public async Task ExecuteDeleteAsync(
+        Expression<Func<TEntity, bool>> condition, 
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        await _dbSet
+            .Where(condition)
+            .ExecuteDeleteAsync(cancellationToken);
+    }
+    
+    public async Task SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _context.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+### Usage in Module Repositories
+
+Module-specific repositories inherit from `BaseRepository`:
+
+```csharp Catalog.Infrastructure/Repositories/ProductRepository.cs
+using Catalog.Domain.ProductAggregate;
+using Catalog.Domain.Interfaces;
+using Catalog.Infrastructure.Contexts;
+using Shared.Infrastructure.Repositories;
+
+namespace Catalog.Infrastructure.Repositories;
+
+public class ProductRepository : 
+    BaseRepository<CatalogContext, Product>, 
+    IProductRepository
+{
+    private readonly CatalogContext _context;
+    
+    public ProductRepository(CatalogContext context) : base(context)
+    {
+        _context = context;
+    }
+    
+    // Additional product-specific methods
+    public async Task<Product?> GetByIdWithMediaAsync(Guid id, CancellationToken ct)
+    {
+        return await _context.Products
+            .Include(p => p.ProductMedias)
+            .Include(p => p.Discount)
+            .Include(p => p.Reviews)
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<ProductShortProjection>> GetByCategoryAsync(
+        Guid categoryId, 
+        CancellationToken ct)
+    {
+        return await _context.Products
+            .AsNoTracking()
+            .Where(p => p.CategoryId == categoryId)
+            .Select(p => new ProductShortProjection
+            {
+                Id = p.Id,
+                Title = p.Title,
+                Price = p.Price,
+                FinalPrice = p.FinalPrice,
+                MainPhotoUrl = p.ProductMedias
+                    .FirstOrDefault(pm => pm.IsMain)!.MediaUrl
+            })
+            .ToListAsync(ct);
+    }
+}
+```
+
+### Value Generators
+
+EF Core value generators for custom ID generation:
+
+```csharp ValueGenerators/GuidValueGenerator.cs
+using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.ValueGeneration;
+
+namespace Shared.Infrastructure.ValueGenerators;
+
+public class GuidValueGenerator : ValueGenerator<Guid>
+{
+    public override Guid Next(EntityEntry entry)
+    {
+        return Guid.CreateVersion7();  // Sequential GUIDs for better performance
+    }
+    
+    public override bool GeneratesTemporaryValues => false;
+}
+```
+
+### Context Interface
+
+```csharp IContextWithConfigurations.cs
+using Microsoft.EntityFrameworkCore;
+
+namespace Shared.Infrastructure;
+
+public interface IContextWithConfigurations
+{
+    void ApplyConfigurations(ModelBuilder modelBuilder);
+}
+```
+
+## EF Core Patterns
+
+### DbContext Base Setup
+
+Typical module DbContext structure:
+
+```csharp Catalog.Infrastructure/Contexts/CatalogContext.cs
+using Microsoft.EntityFrameworkCore;
+using Catalog.Domain.ProductAggregate;
+using Catalog.Domain.CategoryAggregate;
+using Shared.Infrastructure;
+
+namespace Catalog.Infrastructure.Contexts;
+
+public class CatalogContext : DbContext, IContextWithConfigurations
+{
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<Category> Categories => Set<Category>();
+    
+    public CatalogContext(DbContextOptions<CatalogContext> options) 
+        : base(options)
+    {
+    }
+    
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+        ApplyConfigurations(modelBuilder);
+    }
+    
+    public void ApplyConfigurations(ModelBuilder modelBuilder)
+    {
+        // Apply all entity configurations from this assembly
+        modelBuilder.ApplyConfigurationsFromAssembly(
+            typeof(CatalogContext).Assembly);
+    }
+}
+```
+
+### Entity Configuration Example
+
+```csharp Catalog.Infrastructure/Configurations/ProductConfiguration.cs
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Catalog.Domain.ProductAggregate;
+using Catalog.Domain.ProductAggregate.Entities;
+
+namespace Catalog.Infrastructure.Configurations;
+
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+    public void Configure(EntityTypeBuilder<Product> builder)
+    {
+        builder.HasKey(p => p.Id);
+        
+        // Properties
+        builder.Property(p => p.Title)
+            .IsRequired()
+            .HasMaxLength(200);
+        
+        builder.Property(p => p.Description)
+            .IsRequired()
+            .HasMaxLength(2000);
+        
+        builder.Property(p => p.Price)
+            .HasColumnType("decimal(18,2)");
+        
+        builder.Property(p => p.FinalPrice)
+            .HasColumnType("decimal(18,2)");
+        
+        // Relationships
+        builder.HasOne(p => p.Discount)
+            .WithOne(d => d.Product)
+            .HasForeignKey<Discount>(d => d.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
+        
+        builder.HasMany(p => p.ProductMedias)
+            .WithOne(pm => pm.Product)
+            .HasForeignKey(pm => pm.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
+        
+        builder.HasMany(p => p.Reviews)
+            .WithOne(r => r.Product)
+            .HasForeignKey(r => r.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
+        
+        // Indexes
+        builder.HasIndex(p => p.CategoryId);
+        builder.HasIndex(p => p.SellerId);
+        builder.HasIndex(p => p.Status);
+    }
+}
+```
+
+### Configuring Value Objects (Owned Types)
+
+```csharp Seller.Infrastructure/Configurations/SellerConfiguration.cs
+public class SellerConfiguration : IEntityTypeConfiguration<Seller>
+{
+    public void Configure(EntityTypeBuilder<Seller> builder)
+    {
+        builder.HasKey(s => s.Id);
+        
+        // FullName as owned type
+        builder.OwnsOne(s => s.FullName, fn =>
+        {
+            fn.Property(f => f.FirstName)
+                .HasColumnName("FirstName")
+                .HasMaxLength(100)
+                .IsRequired();
+            
+            fn.Property(f => f.LastName)
+                .HasColumnName("LastName")
+                .HasMaxLength(100)
+                .IsRequired();
+            
+            fn.Property(f => f.MiddleName)
+                .HasColumnName("MiddleName")
+                .HasMaxLength(100);
+        });
+        
+        // PhoneNumber as owned type
+        builder.OwnsOne(s => s.PhoneNumber, pn =>
+        {
+            pn.Property(p => p.Value)
+                .HasColumnName("PhoneNumber")
+                .HasMaxLength(20)
+                .IsRequired();
+        });
+        
+        // Address as owned type
+        builder.OwnsOne(s => s.Address, a =>
+        {
+            a.Property(ad => ad.City).HasColumnName("City").HasMaxLength(100);
+            a.Property(ad => ad.Street).HasColumnName("Street").HasMaxLength(200);
+            a.Property(ad => ad.HouseNumber).HasColumnName("HouseNumber");
+            a.Property(ad => ad.ApartmentNumber).HasColumnName("ApartmentNumber");
+        });
+        
+        // BirthDate as owned type
+        builder.OwnsOne(s => s.BirthDate, bd =>
+        {
+            bd.Property(b => b.Value)
+                .HasColumnName("BirthDate")
+                .HasColumnType("date");
+        });
+    }
+}
+```
+
+## Database Migration Pattern
+
+Each module manages its own migrations:
+
+```bash
+# Add migration for specific module
+dotnet ef migrations add InitialCreate \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API \
+  --context CatalogContext
+
+# Update database
+dotnet ef database update \
+  --project Catalog.Infrastructure \
+  --startup-project Wolfix.API \
+  --context CatalogContext
+```
+
+## Connection String Configuration
+
+```json appsettings.json
+{
+  "ConnectionStrings": {
+    "CatalogDb": "Server=localhost;Database=Wolfix_Catalog;...",
+    "OrderDb": "Server=localhost;Database=Wolfix_Order;...",
+    "CustomerDb": "Server=localhost;Database=Wolfix_Customer;...",
+    "SellerDb": "Server=localhost;Database=Wolfix_Seller;...",
+    "IdentityDb": "Server=localhost;Database=Wolfix_Identity;...",
+    "MediaDb": "Server=localhost;Database=Wolfix_Media;...",
+    "SupportDb": "Server=localhost;Database=Wolfix_Support;...",
+    "AdminDb": "Server=localhost;Database=Wolfix_Admin;..."
+  }
+}
+```
+
+```csharp Program.cs
+// Register DbContexts for each module
+builder.Services.AddDbContext<CatalogContext>(options =>
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("CatalogDb")));
+
+builder.Services.AddDbContext<OrderContext>(options =>
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("OrderDb")));
+
+// ... other contexts
+```
+
+## Repository Registration
+
+```csharp Catalog.Infrastructure/Extensions/DependencyInjection.cs
+using Microsoft.Extensions.DependencyInjection;
+using Catalog.Domain.Interfaces;
+using Catalog.Infrastructure.Repositories;
+
+namespace Catalog.Infrastructure.Extensions;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddCatalogInfrastructure(
+        this IServiceCollection services)
+    {
+        // Register repositories
+        services.AddScoped<IProductRepository, ProductRepository>();
+        services.AddScoped<ICategoryRepository, CategoryRepository>();
+        
+        return services;
+    }
+}
+```
+
+## Performance Optimizations
+
+### AsNoTracking for Read Operations
+
+Always use `AsNoTracking()` for read-only queries:
+
+```csharp
+// Good - No tracking for read-only projection
+public async Task<IReadOnlyCollection<ProductShortDto>> GetProductsAsync()
+{
+    return await _context.Products
+        .AsNoTracking()
+        .Select(p => new ProductShortDto { /* ... */ })
+        .ToListAsync();
+}
+
+// Bad - Unnecessary tracking overhead
+public async Task<IReadOnlyCollection<Product>> GetProductsAsync()
+{
+    return await _context.Products.ToListAsync();  // Tracking enabled
+}
+```
+
+### Projections for Performance
+
+Use projections to fetch only required data:
+
+```csharp
+// Good - Select only needed columns
+var products = await _context.Products
+    .AsNoTracking()
+    .Select(p => new ProductShortProjection
+    {
+        Id = p.Id,
+        Title = p.Title,
+        Price = p.Price
+    })
+    .ToListAsync();
+
+// Bad - Loads entire entity graph
+var products = await _context.Products
+    .Include(p => p.Reviews)
+    .Include(p => p.ProductMedias)
+    .ToListAsync();
+```
+
+### Bulk Operations
+
+Use EF Core's `ExecuteDeleteAsync` and `ExecuteUpdateAsync`:
+
+```csharp
+// Efficient bulk delete
+await _context.Products
+    .Where(p => p.Status == ProductStatus.Inactive)
+    .ExecuteDeleteAsync();
+
+// Efficient bulk update (EF Core 7+)
+await _context.Products
+    .Where(p => p.CategoryId == oldCategoryId)
+    .ExecuteUpdateAsync(setters => setters
+        .SetProperty(p => p.CategoryId, newCategoryId));
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Separate Databases" icon="database">
+    Each module has its own database for true data isolation
+  </Card>
+  <Card title="AsNoTracking" icon="gauge-high">
+    Use for all read-only queries to improve performance
+  </Card>
+  <Card title="Explicit Configuration" icon="gear">
+    Always configure entities explicitly - avoid relying on conventions
+  </Card>
+  <Card title="Migration Isolation" icon="code-branch">
+    Each module manages its own migrations independently
+  </Card>
+</CardGroup>
+
+## Related Modules
+
+- **Shared.Domain** - Infrastructure implements domain repository interfaces
+- **All Business Modules** - All modules use `BaseRepository` and EF Core patterns

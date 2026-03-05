@@ -1,80 +1,220 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get Wolfix.Server running locally in minutes with .NET Aspire
 ---
 
-## Get started in three steps
+Get Wolfix.Server up and running locally in minutes using .NET Aspire for orchestration.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have the following installed:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title=".NET 9 SDK" icon="microsoft">
+    Download from [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/9.0)
+  </Card>
+  <Card title="Docker Desktop" icon="docker">
+    Required for PostgreSQL and MongoDB containers. Download from [docker.com](https://www.docker.com/products/docker-desktop/)
+  </Card>
+  <Card title="Visual Studio 2022" icon="code">
+    Version 17.12+ or JetBrains Rider (optional but recommended)
+  </Card>
+  <Card title="Git" icon="git">
+    For cloning the repository
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+<Warning>
+  Docker Desktop must be running before starting the application, as .NET Aspire will automatically provision PostgreSQL and MongoDB containers.
+</Warning>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the Repository">
+    ```bash
+    git clone https://github.com/Dmytro-Butnyk/Wolfix.Server.git
+    cd Wolfix.Server/Wolfix.Server
+    ```
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Create a `.env` file in the `Wolfix.AppHost` directory with the required configuration:
+
+    ```bash .env
+    # Database
+    DB=Host=localhost;Port=5432;Database=wolfix;Username=postgres;Password=postgres;
+
+    # JWT Token
+    TOKEN_KEY=your-secret-key-here-min-32-chars
+
+    # Stripe
+    STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key
+
+    # Google OAuth
+    GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+
+    # Azure Blob Storage
+    AZURE_STORAGE_CONNECTION_STRING=your-azure-storage-connection-string
+    ```
+
+    <Info>
+      For development, you can use the PostgreSQL credentials that .NET Aspire will provision automatically. Update other keys as needed for the features you want to test.
+    </Info>
+  </Step>
+
+  <Step title="Open the Solution">
+    Open `Wolfix.Server.sln` in Visual Studio 2022 (17.12+) or JetBrains Rider.
+  </Step>
+
+  <Step title="Set Startup Project">
+    Set **Wolfix.AppHost** as the startup project:
+    
+    - In Visual Studio: Right-click `Wolfix.AppHost` → Set as Startup Project
+    - In Rider: Edit Run Configuration → Select `Wolfix.AppHost`
+  </Step>
+
+  <Step title="Run the Application">
+    Press **F5** or click the Run button.
+
+    .NET Aspire will:
+    - Start the Aspire Dashboard at `http://localhost:17170`
+    - Launch MongoDB container automatically
+    - Launch the Toxicity API container
+    - Start the Wolfix.API application
+    - Apply database migrations
+  </Step>
+
+  <Step title="Access the API">
+    Once running, you can access:
+    
+    - **Swagger UI**: `https://localhost:5001/swagger`
+    - **Aspire Dashboard**: `http://localhost:17170`
+    - **API Base URL**: `https://localhost:5001/api`
+
+    The root URL (`https://localhost:5001/`) automatically redirects to Swagger in development mode.
+  </Step>
+</Steps>
+
+## Verify Installation
+
+<Tabs>
+  <Tab title="Using Swagger">
+    1. Navigate to `https://localhost:5001/swagger`
+    2. Expand the **Identity** section
+    3. Try the `POST /api/account/customer/register` endpoint
+    4. Click **Try it out** and provide a sample request:
+
+    ```json
+    {
+      "email": "test@example.com",
+      "password": "Test123!",
+      "firstName": "John",
+      "lastName": "Doe",
+      "phoneNumber": "+380501234567",
+      "birthDate": "1990-01-01"
+    }
+    ```
+
+    5. Click **Execute** - you should receive a 200 OK response with a JWT token
+  </Tab>
+
+  <Tab title="Using cURL">
+    ```bash
+    curl -X POST "https://localhost:5001/api/account/customer/register" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "test@example.com",
+        "password": "Test123!",
+        "firstName": "John",
+        "lastName": "Doe",
+        "phoneNumber": "+380501234567",
+        "birthDate": "1990-01-01"
+      }'
+    ```
+  </Tab>
+
+  <Tab title="Check Aspire Dashboard">
+    1. Open `http://localhost:17170`
+    2. View running resources:
+       - **Wolfix.API** - Main application
+       - **mongodb-local** - MongoDB container
+       - **toxic-api** - Toxicity detection service
+    3. Check logs, traces, and metrics for each service
+  </Tab>
+</Tabs>
+
+## Running Without Visual Studio
+
+You can also run the application using the .NET CLI:
+
+```bash
+# Navigate to the AppHost project
+cd Wolfix.Server/Wolfix.AppHost
+
+# Run the application
+dotnet run
+```
+
+The Aspire dashboard will open automatically in your browser.
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Docker not running">
+    **Error**: "Docker is not running"
+    
+    **Solution**: Ensure Docker Desktop is running before starting the application.
+    
+    ```bash
+    # Check Docker status
+    docker ps
+    ```
+  </Accordion>
+
+  <Accordion title="Port already in use">
+    **Error**: "Port 5001 is already in use"
+    
+    **Solution**: Stop any other applications using ports 5001, 5000, or 17170.
+    
+    ```bash
+    # Windows - Find process using port
+    netstat -ano | findstr :5001
+    
+    # macOS/Linux - Find process using port
+    lsof -i :5001
+    ```
+  </Accordion>
+
+  <Accordion title="Database migration errors">
+    **Error**: "Cannot connect to database"
+    
+    **Solution**: Ensure PostgreSQL container is running via Aspire. Check the Aspire dashboard for container status.
+  </Accordion>
+
+  <Accordion title="Missing environment variables">
+    **Error**: "Configuration value for 'TOKEN_KEY' not found"
+    
+    **Solution**: Ensure your `.env` file exists in the `Wolfix.AppHost` directory with all required variables.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture">
+    Understand the modular monolith design
+  </Card>
+  
+  <Card title="Core Concepts" icon="book" href="/concepts/modular-monolith">
+    Learn about Clean Architecture and DDD
+  </Card>
+  
+  <Card title="API Reference" icon="terminal" href="/api/overview">
+    Explore all available endpoints
+  </Card>
+  
+  <Card title="Development Guide" icon="code" href="/guides/development">
+    Start building new features
+  </Card>
+</CardGroup>

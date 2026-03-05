@@ -1,0 +1,539 @@
+---
+title: 'Customer Module'
+description: 'Customer profiles, shopping carts, favorites, and bonus management'
+icon: 'user'
+---
+
+## Overview
+
+The **Customer** module manages customer profiles, shopping carts, favorite products, and the bonus/loyalty program. It tracks customer violations and account status.
+
+## Bounded Context
+
+The Customer module is responsible for:
+
+- Customer profile management (personal info, photo, address)
+- Shopping cart operations (add, remove, update quantity)
+- Favorite products (wishlist)
+- Bonus points accumulation and usage
+- Violation tracking and account suspension
+- Customer account lifecycle
+
+## Domain Layer
+
+**Location**: `Customer.Domain/`
+
+### Customer Aggregate
+
+**Root**: `Customer` entity
+
+```csharp CustomerAggregate/Customer.cs
+public sealed class Customer : BaseEntity
+{
+    public string? PhotoUrl { get; private set; }
+    
+    internal FullName? FullName { get; private set; }
+    internal PhoneNumber? PhoneNumber { get; private set; }
+    internal Address? Address { get; private set; }
+    internal BirthDate? BirthDate { get; private set; }
+    
+    public decimal BonusesAmount { get; private set; }
+    internal ViolationStatus ViolationStatus { get; private set; }
+    public Guid AccountId { get; private set; }  // Reference to Identity
+    
+    private readonly List<FavoriteItem> _favoriteItems = [];
+    public IReadOnlyCollection<FavoriteItemInfo> FavoriteItems => _favoriteItems
+        .Select(fi => (FavoriteItemInfo)fi)
+        .ToList()
+        .AsReadOnly();
+    
+    private readonly List<CartItem> _cartItems = [];
+    public IReadOnlyCollection<CartItemInfo> CartItems => _cartItems
+        .Select(ci => (CartItemInfo)ci)
+        .ToList()
+        .AsReadOnly();
+    
+    public decimal TotalCartPriceWithoutBonuses => 
+        _cartItems.Sum(ci => ci.PriceWithDiscount);
+    
+    // Factory methods
+    public static Result<Customer> Create(Guid accountId)
+    {
+        if (accountId == Guid.Empty)
+            return Result<Customer>.Failure("Account ID cannot be empty");
+        
+        Customer customer = new(accountId, ViolationStatus.Create().Value!);
+        return Result<Customer>.Success(customer);
+    }
+    
+    public static Result<Customer> CreateViaGoogle(
+        Guid accountId, string lastName, string firstName, string photoUrl)
+    {
+        Result<FullName> fullNameResult = FullName.Create(firstName, lastName);
+        if (fullNameResult.IsFailure)
+            return Result<Customer>.Failure(fullNameResult);
+        
+        Customer customer = new(
+            accountId, 
+            ViolationStatus.Create().Value!, 
+            fullNameResult.Value!, 
+            photoUrl);
+        return Result<Customer>.Success(customer);
+    }
+    
+    // Profile management
+    public VoidResult ChangeFullName(string firstName, string lastName, string? middleName = null)
+    {
+        Result<FullName> result = FullName.Create(firstName, lastName, middleName);
+        return result.Map(
+            onSuccess: fullName => { FullName = fullName; return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult ChangeAddress(string city, string street, uint houseNumber, uint? apartmentNumber = null)
+    {
+        Result<Address> result = Address.Create(city, street, houseNumber, apartmentNumber);
+        return result.Map(
+            onSuccess: address => { Address = address; return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult ChangePhotoUrl(string photoUrl)
+    {
+        if (string.IsNullOrWhiteSpace(photoUrl))
+            return VoidResult.Failure("Photo URL is required");
+        
+        PhotoUrl = photoUrl;
+        return VoidResult.Success();
+    }
+    
+    // Bonus management
+    public VoidResult AddBonuses(decimal amount)
+    {
+        if (amount <= 0)
+            return VoidResult.Failure("Bonus amount must be positive");
+        
+        BonusesAmount += amount;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult DeductBonuses(decimal amount)
+    {
+        if (amount <= 0)
+            return VoidResult.Failure("Bonus amount must be positive");
+        if (amount > BonusesAmount)
+            return VoidResult.Failure("Insufficient bonuses");
+        
+        BonusesAmount -= amount;
+        return VoidResult.Success();
+    }
+    
+    // Cart management
+    public VoidResult AddToCart(
+        Guid productId, string productTitle, decimal price, 
+        decimal priceWithDiscount, uint bonuses, string? photoUrl)
+    {
+        // Check if already in cart
+        CartItem? existing = _cartItems.FirstOrDefault(ci => ci.ProductId == productId);
+        if (existing != null)
+        {
+            // Increment quantity
+            return existing.IncrementQuantity();
+        }
+        
+        Result<CartItem> result = CartItem.Create(
+            this, productId, productTitle, price, priceWithDiscount, bonuses, photoUrl);
+        
+        return result.Map(
+            onSuccess: cartItem => { _cartItems.Add(cartItem); return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult RemoveFromCart(Guid productId)
+    {
+        CartItem? cartItem = _cartItems.FirstOrDefault(ci => ci.ProductId == productId);
+        if (cartItem == null)
+            return VoidResult.Failure("Product not in cart", HttpStatusCode.NotFound);
+        
+        _cartItems.Remove(cartItem);
+        return VoidResult.Success();
+    }
+    
+    public VoidResult ClearCart()
+    {
+        _cartItems.Clear();
+        return VoidResult.Success();
+    }
+    
+    public VoidResult ChangeCartItemQuantity(Guid productId, uint quantity)
+    {
+        CartItem? cartItem = _cartItems.FirstOrDefault(ci => ci.ProductId == productId);
+        if (cartItem == null)
+            return VoidResult.Failure("Product not in cart", HttpStatusCode.NotFound);
+        
+        return cartItem.ChangeQuantity(quantity);
+    }
+    
+    // Favorites management
+    public VoidResult AddToFavorites(
+        Guid productId, string productTitle, decimal price, 
+        decimal priceWithDiscount, string? photoUrl)
+    {
+        if (_favoriteItems.Any(fi => fi.ProductId == productId))
+            return VoidResult.Failure("Product already in favorites", HttpStatusCode.Conflict);
+        
+        Result<FavoriteItem> result = FavoriteItem.Create(
+            this, productId, productTitle, price, priceWithDiscount, photoUrl);
+        
+        return result.Map(
+            onSuccess: favoriteItem => { _favoriteItems.Add(favoriteItem); return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult RemoveFromFavorites(Guid productId)
+    {
+        FavoriteItem? favoriteItem = _favoriteItems.FirstOrDefault(fi => fi.ProductId == productId);
+        if (favoriteItem == null)
+            return VoidResult.Failure("Product not in favorites", HttpStatusCode.NotFound);
+        
+        _favoriteItems.Remove(favoriteItem);
+        return VoidResult.Success();
+    }
+    
+    // Violation management
+    public VoidResult AddViolation(string reason)
+    {
+        return ViolationStatus.AddViolation(reason);
+    }
+    
+    public VoidResult RemoveViolation()
+    {
+        return ViolationStatus.RemoveViolation();
+    }
+}
+```
+
+**Child Entities**:
+
+<CodeGroup>
+
+```csharp Entities/CartItem.cs
+public sealed class CartItem : BaseEntity
+{
+    public Customer Customer { get; private set; }
+    public Guid ProductId { get; private set; }
+    public string ProductTitle { get; private set; }
+    public decimal Price { get; private set; }
+    public decimal PriceWithDiscount { get; private set; }
+    public uint Quantity { get; private set; } = 1;
+    public uint Bonuses { get; private set; }
+    public string? PhotoUrl { get; private set; }
+    
+    public static Result<CartItem> Create(
+        Customer customer, Guid productId, string productTitle, 
+        decimal price, decimal priceWithDiscount, uint bonuses, string? photoUrl)
+    {
+        if (productId == Guid.Empty)
+            return Result<CartItem>.Failure("Product ID is required");
+        if (string.IsNullOrWhiteSpace(productTitle))
+            return Result<CartItem>.Failure("Product title is required");
+        if (price <= 0)
+            return Result<CartItem>.Failure("Price must be positive");
+        
+        return Result<CartItem>.Success(
+            new CartItem(customer, productId, productTitle, price, priceWithDiscount, bonuses, photoUrl));
+    }
+    
+    public VoidResult IncrementQuantity()
+    {
+        Quantity++;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult DecrementQuantity()
+    {
+        if (Quantity == 1)
+            return VoidResult.Failure("Cannot decrement below 1");
+        
+        Quantity--;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult ChangeQuantity(uint quantity)
+    {
+        if (quantity == 0)
+            return VoidResult.Failure("Quantity must be at least 1");
+        
+        Quantity = quantity;
+        return VoidResult.Success();
+    }
+}
+```
+
+```csharp Entities/FavoriteItem.cs
+public sealed class FavoriteItem : BaseEntity
+{
+    public Customer Customer { get; private set; }
+    public Guid ProductId { get; private set; }
+    public string ProductTitle { get; private set; }
+    public decimal Price { get; private set; }
+    public decimal PriceWithDiscount { get; private set; }
+    public string? PhotoUrl { get; private set; }
+    public DateTime AddedAt { get; private set; } = DateTime.UtcNow;
+    
+    public static Result<FavoriteItem> Create(
+        Customer customer, Guid productId, string productTitle, 
+        decimal price, decimal priceWithDiscount, string? photoUrl)
+    {
+        if (productId == Guid.Empty)
+            return Result<FavoriteItem>.Failure("Product ID is required");
+        if (string.IsNullOrWhiteSpace(productTitle))
+            return Result<FavoriteItem>.Failure("Product title is required");
+        
+        return Result<FavoriteItem>.Success(
+            new FavoriteItem(customer, productId, productTitle, price, priceWithDiscount, photoUrl));
+    }
+}
+```
+
+</CodeGroup>
+
+**Value Objects**:
+
+```csharp ValueObjects/ViolationStatus.cs
+public sealed class ViolationStatus
+{
+    public int ViolationsCount { get; private set; }
+    public AccountStatus Status { get; private set; }
+    public string? Reason { get; private set; }
+    
+    private const int SuspensionThreshold = 3;
+    
+    public static Result<ViolationStatus> Create()
+    {
+        return Result<ViolationStatus>.Success(
+            new ViolationStatus { ViolationsCount = 0, Status = AccountStatus.Active });
+    }
+    
+    public VoidResult AddViolation(string reason)
+    {
+        ViolationsCount++;
+        Reason = reason;
+        
+        if (ViolationsCount >= SuspensionThreshold)
+        {
+            Status = AccountStatus.Suspended;
+        }
+        
+        return VoidResult.Success();
+    }
+    
+    public VoidResult RemoveViolation()
+    {
+        if (ViolationsCount == 0)
+            return VoidResult.Failure("No violations to remove");
+        
+        ViolationsCount--;
+        
+        if (ViolationsCount < SuspensionThreshold)
+        {
+            Status = AccountStatus.Active;
+            Reason = null;
+        }
+        
+        return VoidResult.Success();
+    }
+}
+
+public enum AccountStatus
+{
+    Active,
+    Suspended,
+    Banned
+}
+```
+
+## Application Layer
+
+**Location**: `Customer.Application/`
+
+### Services
+
+```csharp Services/CustomerService.cs
+public sealed class CustomerService
+{
+    public async Task<VoidResult> AddProductToCartAsync(
+        Guid customerId, Guid productId, CancellationToken ct)
+    {
+        // Verify product exists via integration event
+        Result<ProductCartInfoDto> productResult = await _eventBus
+            .PublishWithSingleResultAsync<ProductExistsForAddingToCart, ProductCartInfoDto>(
+                new ProductExistsForAddingToCart(productId), ct);
+        
+        if (productResult.IsFailure)
+            return VoidResult.Failure(productResult);
+        
+        var productInfo = productResult.Value!;
+        
+        // Get customer
+        Customer? customer = await _customerRepository.GetByIdAsync(customerId, ct);
+        if (customer == null)
+            return VoidResult.Failure("Customer not found", HttpStatusCode.NotFound);
+        
+        // Add to cart
+        VoidResult addResult = customer.AddToCart(
+            productId, productInfo.Title, productInfo.Price, 
+            productInfo.PriceWithDiscount, productInfo.Bonuses, productInfo.PhotoUrl);
+        
+        if (addResult.IsFailure)
+            return addResult;
+        
+        await _customerRepository.SaveChangesAsync(ct);
+        return VoidResult.Success();
+    }
+    
+    public async Task<Result<IReadOnlyCollection<CartItemDto>>> GetCartAsync(
+        Guid customerId, CancellationToken ct)
+    {
+        var cartItems = await _customerRepository.GetCartItemsAsync(customerId, ct);
+        var dtos = cartItems.Select(ci => ci.ToDto()).ToList();
+        return Result<IReadOnlyCollection<CartItemDto>>.Success(dtos);
+    }
+}
+```
+
+### Integration Event Handlers
+
+```csharp EventHandlers/CustomerRegisteredHandler.cs
+public class CustomerRegisteredHandler : 
+    IIntegrationEventHandler<CustomerRegistered>
+{
+    public async Task<VoidResult> HandleAsync(
+        CustomerRegistered @event, 
+        CancellationToken ct)
+    {
+        Result<Customer> createResult = Customer.Create(@event.AccountId);
+        if (createResult.IsFailure)
+            return VoidResult.Failure(createResult);
+        
+        await _customerRepository.AddAsync(createResult.Value!, ct);
+        await _customerRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Infrastructure Layer
+
+**Location**: `Customer.Infrastructure/`
+
+### Repository Implementation
+
+```csharp Repositories/CustomerRepository.cs
+public class CustomerRepository : BaseRepository<CustomerContext, Customer>, ICustomerRepository
+{
+    public async Task<Customer?> GetByAccountIdAsync(Guid accountId, CancellationToken ct)
+    {
+        return await _context.Customers
+            .Include(c => c.CartItems)
+            .Include(c => c.FavoriteItems)
+            .FirstOrDefaultAsync(c => c.AccountId == accountId, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<CartItemProjection>> GetCartItemsAsync(
+        Guid customerId, 
+        CancellationToken ct)
+    {
+        return await _context.Customers
+            .AsNoTracking()
+            .Where(c => c.Id == customerId)
+            .SelectMany(c => c.CartItems)
+            .Select(ci => new CartItemProjection
+            {
+                Id = ci.Id,
+                ProductId = ci.ProductId,
+                ProductTitle = ci.ProductTitle,
+                Price = ci.Price,
+                PriceWithDiscount = ci.PriceWithDiscount,
+                Quantity = ci.Quantity,
+                Bonuses = ci.Bonuses,
+                PhotoUrl = ci.PhotoUrl
+            })
+            .ToListAsync(ct);
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Customer.Endpoints/`
+
+```csharp Endpoints/CustomerEndpoints.cs
+internal static class CustomerEndpoints
+{
+    public static void MapCustomerEndpoints(this IEndpointRouteBuilder app)
+    {
+        var customerGroup = app.MapGroup("api/customers")
+            .WithTags("Customers")
+            .RequireAuthorization("Customer");
+        
+        // Profile
+        customerGroup.MapGet("profile", GetProfile)
+            .WithSummary("Get customer profile");
+        
+        customerGroup.MapPatch("profile/full-name", ChangeFullName)
+            .WithSummary("Update full name");
+        
+        // Cart
+        customerGroup.MapGet("cart", GetCart)
+            .WithSummary("Get shopping cart");
+        
+        customerGroup.MapPost("cart/{productId:guid}", AddToCart)
+            .WithSummary("Add product to cart");
+        
+        customerGroup.MapDelete("cart/{productId:guid}", RemoveFromCart)
+            .WithSummary("Remove product from cart");
+        
+        customerGroup.MapPatch("cart/{productId:guid}/quantity", ChangeCartQuantity)
+            .WithSummary("Update cart item quantity");
+        
+        // Favorites
+        customerGroup.MapGet("favorites", GetFavorites)
+            .WithSummary("Get favorite products");
+        
+        customerGroup.MapPost("favorites/{productId:guid}", AddToFavorites)
+            .WithSummary("Add product to favorites");
+        
+        customerGroup.MapDelete("favorites/{productId:guid}", RemoveFromFavorites)
+            .WithSummary("Remove product from favorites");
+    }
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Customer.IntegrationEvents/
+public record ProductExistsForAddingToCart(Guid ProductId) : IIntegrationEvent;
+public record ProductExistsForAddingToFavorite(Guid ProductId) : IIntegrationEvent;
+public record CustomerWantsToBeSeller(Guid CustomerId) : IIntegrationEvent;
+```
+
+### Consumed
+
+- `CustomerRegistered` - From Identity module
+- `CustomerRegisteredViaGoogle` - From Identity module
+- `DeductBonusesFromCustomer` - From Order module
+- `AddBonusesToCustomer` - From Order module (after order completion)
+
+## Related Modules
+
+- **Identity** - Customer accounts created from Identity events
+- **Catalog** - Cart and favorites reference products
+- **Order** - Orders created from cart, bonuses used in orders

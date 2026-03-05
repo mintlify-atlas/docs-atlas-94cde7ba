@@ -1,0 +1,380 @@
+---
+title: 'Seller Products'
+description: 'Manage product listings as a seller'
+---
+
+## Overview
+
+Sellers can create, update, and delete their own product listings. All product management endpoints require Seller authentication.
+
+<Info>
+  For detailed product API documentation including creation, updates, and general product operations, see the [Products API](/api/catalog/products) section.
+</Info>
+
+---
+
+## Get Seller Products by Category (Seller)
+
+<api method="GET" path="/api/products/seller/{sellerId}/category/{categoryId}/page/{page}" auth="Seller" />
+
+Retrieves paginated products for a specific seller and category.
+
+### Path Parameters
+
+<ParamField path="sellerId" type="string (uuid)" required>
+  Seller identifier (must match authenticated seller)
+</ParamField>
+
+<ParamField path="categoryId" type="string (uuid)" required>
+  Category identifier
+</ParamField>
+
+<ParamField path="page" type="integer" required>
+  Page number (starts at 1)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="pageSize" type="integer" default="20">
+  Number of products per page
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of product objects
+</ResponseField>
+
+<ResponseField name="totalCount" type="integer">
+  Total products in this category
+</ResponseField>
+
+<ResponseField name="currentPage" type="integer">
+  Current page number
+</ResponseField>
+
+<ResponseField name="totalPages" type="integer">
+  Total number of pages
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Products retrieved
+- `404 Not Found` - Seller or category not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/products/seller/seller-uuid/category/category-uuid/page/1?pageSize=20" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+{
+  "items": [
+    {
+      "id": "product-uuid-1",
+      "name": "Premium Wireless Headphones",
+      "price": 249.99,
+      "discountPrice": 199.99,
+      "mainPhotoUrl": "https://cdn.example.com/products/headphones.jpg",
+      "inStock": true,
+      "quantity": 15,
+      "averageRating": 4.5,
+      "reviewCount": 128
+    },
+    {
+      "id": "product-uuid-2",
+      "name": "Noise Cancelling Earbuds",
+      "price": 129.99,
+      "discountPrice": null,
+      "mainPhotoUrl": "https://cdn.example.com/products/earbuds.jpg",
+      "inStock": true,
+      "quantity": 42,
+      "averageRating": 4.7,
+      "reviewCount": 89
+    }
+  ],
+  "totalCount": 45,
+  "currentPage": 1,
+  "totalPages": 3
+}
+```
+
+---
+
+## Create Product (Seller)
+
+See [Products API - Create Product](/api/catalog/products#create-product-seller) for detailed documentation.
+
+**Quick Reference:**
+
+```bash cURL
+curl -X POST "https://your-server.com/api/products" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "name=Premium Headphones" \
+  -F "description=High-quality audio" \
+  -F "price=249.99" \
+  -F "quantity=50" \
+  -F "categoryId=category-uuid" \
+  -F "sellerId=seller-uuid" \
+  -F "mainPhoto=@/path/to/image.jpg"
+```
+
+---
+
+## Update Product General Info (Seller)
+
+See [Products API - Update General Info](/api/catalog/products#update-product-general-info-seller).
+
+<api method="PATCH" path="/api/products/product/{productId}/general-info" auth="Seller" />
+
+### Request Body
+
+<ParamField body="name" type="string">
+  Updated product name
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated product description
+</ParamField>
+
+<ParamField body="quantity" type="integer">
+  Updated stock quantity
+</ParamField>
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/products/product/product-uuid/general-info" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Product Name",
+    "description": "Updated description with more details",
+    "quantity": 100
+  }'
+```
+
+---
+
+## Update Product Price (Seller)
+
+See [Products API - Update Price](/api/catalog/products#update-product-price-seller).
+
+<api method="PATCH" path="/api/products/product/{productId}/price" auth="Seller" />
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/products/product/product-uuid/price" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"newPrice": 229.99}'
+```
+
+---
+
+## Add Product Discount (Seller)
+
+See [Discounts API - Add Discount](/api/catalog/discounts#add-product-discount-seller).
+
+### Example
+
+```bash cURL
+curl -X POST "https://your-server.com/api/products/product/product-uuid/discount" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "discountPercentage": 20,
+    "startDate": "2024-01-20T00:00:00Z",
+    "endDate": "2024-01-31T23:59:59Z"
+  }'
+```
+
+---
+
+## Change Product Main Photo (Seller)
+
+<api method="PATCH" path="/api/products/product/{productId}/new-main-photo/{newMainPhotoId}" auth="Seller" />
+
+Changes the main display photo for a product.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+<ParamField path="newMainPhotoId" type="string (uuid)" required>
+  ID of the media item to set as main photo (must be an existing product photo)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Main photo updated
+- `400 Bad Request` - Invalid photo ID or photo doesn't belong to product
+- `404 Not Found` - Product or photo not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/products/product/product-uuid/new-main-photo/photo-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+---
+
+## Add Product Media (Seller)
+
+<api method="PATCH" path="/api/products/add-product-media" auth="Seller" />
+
+Adds additional images or videos to a product.
+
+### Request Body (multipart/form-data)
+
+<ParamField body="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+<ParamField body="media" type="file[]" required>
+  Media files to add (images or videos)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Media added
+- `400 Bad Request` - Invalid file format or size
+- `404 Not Found` - Product not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/products/add-product-media" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "productId=product-uuid" \
+  -F "media=@/path/to/photo1.jpg" \
+  -F "media=@/path/to/photo2.jpg"
+```
+
+---
+
+## Delete Product Media (Seller)
+
+<api method="DELETE" path="/api/products/product/{productId}/media/{mediaId}" auth="Seller" />
+
+Removes a media file from a product.
+
+### Path Parameters
+
+<ParamField path="productId" type="string (uuid)" required>
+  Product identifier
+</ParamField>
+
+<ParamField path="mediaId" type="string (uuid)" required>
+  Media item identifier to delete
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Media deleted
+- `400 Bad Request` - Cannot delete main photo or invalid media
+- `404 Not Found` - Product or media not found
+
+### Example
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/products/product/product-uuid/media/media-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+<Warning>
+  Cannot delete the main product photo. Set a different photo as main before deleting.
+</Warning>
+
+---
+
+## Delete Product (Seller)
+
+See [Products API - Delete Product](/api/catalog/products#delete-product-seller).
+
+### Example
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/products/product-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+---
+
+## Product Management Tips
+
+### Product Creation Checklist
+
+<Steps>
+  <Step title="Choose Category">
+    Select the appropriate category for your product
+  </Step>
+  <Step title="Get Category Attributes">
+    Fetch required attributes for the category using `/api/categories/child/{childId}/attributes`
+  </Step>
+  <Step title="Prepare Product Data">
+    Gather product information, pricing, and stock quantity
+  </Step>
+  <Step title="Prepare Images">
+    Prepare high-quality product images (recommended: 1200x1200px)
+  </Step>
+  <Step title="Create Product">
+    Submit product creation request with all required data
+  </Step>
+  <Step title="Add Additional Media">
+    Optionally add more images or videos
+  </Step>
+</Steps>
+
+### Image Guidelines
+
+<Info>
+  **Recommended Image Specifications:**
+  - Format: JPEG or PNG
+  - Resolution: 1200x1200px or higher
+  - Aspect Ratio: Square (1:1) preferred
+  - File Size: Under 2MB per image
+  - Background: Clean white or neutral background
+</Info>
+
+### Inventory Management
+
+```javascript
+// Track low stock products
+async function checkLowStock(sellerId) {
+  const products = await fetchSellerProducts(sellerId);
+  
+  const lowStock = products.filter(p => p.quantity < 10 && p.quantity > 0);
+  const outOfStock = products.filter(p => p.quantity === 0);
+  
+  if (lowStock.length > 0) {
+    notifySeller('Low Stock Alert', `${lowStock.length} products running low`);
+  }
+  
+  if (outOfStock.length > 0) {
+    notifySeller('Out of Stock', `${outOfStock.length} products out of stock`);
+  }
+}
+```
+
+### Pricing Strategies
+
+<Info>
+  **Competitive Pricing**: Research similar products to price competitively
+</Info>
+
+<Info>
+  **Seasonal Discounts**: Use discount features for seasonal promotions
+</Info>
+
+<Info>
+  **Bundle Pricing**: Consider creating product bundles for better value
+</Info>

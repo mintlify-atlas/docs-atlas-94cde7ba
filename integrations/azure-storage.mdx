@@ -1,0 +1,553 @@
+---
+title: Azure Blob Storage Integration
+description: File storage with Azure Blob Storage in the Media module
+---
+
+Wolfix.Server uses **Azure Blob Storage** for storing product images, user avatars, and other media files in the Media module.
+
+## Overview
+
+The Media module provides:
+
+- **File uploads** - Store images and videos
+- **URL generation** - Get public URLs for stored files
+- **File deletion** - Remove files from storage
+- **Container management** - Organize files in containers
+
+## Configuration
+
+### Azure Setup
+
+<Steps>
+  <Step title="Create Storage Account">
+    ```bash
+    # Using Azure CLI
+    az storage account create \
+      --name wolfixstorage \
+      --resource-group wolfix-rg \
+      --location eastus \
+      --sku Standard_LRS \
+      --kind StorageV2
+    ```
+  </Step>
+
+  <Step title="Get Connection String">
+    ```bash
+    az storage account show-connection-string \
+      --name wolfixstorage \
+      --resource-group wolfix-rg \
+      --query connectionString \
+      --output tsv
+    ```
+    
+    Output:
+    ```
+    DefaultEndpointsProtocol=https;AccountName=wolfixstorage;AccountKey=...;EndpointSuffix=core.windows.net
+    ```
+  </Step>
+
+  <Step title="Configure Environment Variable">
+    Add to `.env` file:
+    ```bash
+    BLOB=DefaultEndpointsProtocol=https;AccountName=wolfixstorage;AccountKey=...;EndpointSuffix=core.windows.net
+    ```
+  </Step>
+</Steps>
+
+### Module Registration
+
+The Media module is registered in the API:
+
+```csharp Wolfix.API/Extensions/WebApplicationBuilderExtension.cs
+private static WebApplicationBuilder AddMediaModule(
+    this WebApplicationBuilder builder, 
+    string connectionString)
+{
+    builder.Services.AddMediaModule(connectionString, builder.Configuration);
+    return builder;
+}
+```
+
+## Implementation
+
+### Azure Blob Repository
+
+The repository handles all Azure Blob operations:
+
+```csharp Media.Infrastructure/Repositories/AzureBlobRepository.cs
+using Azure.Storage.Blobs;
+using Media.Domain.Interfaces;
+using Microsoft.Extensions.Configuration;
+
+namespace Media.Infrastructure.Repositories;
+
+internal sealed class AzureBlobRepository : IAzureBlobRepository
+{
+    private readonly BlobServiceClient _blobServiceClient;
+
+    public AzureBlobRepository(IConfiguration configuration)
+    {
+        string connectionString = configuration["BLOB"]
+            ?? throw new Exception("Configuration key BLOB not found");
+        
+        _blobServiceClient = new BlobServiceClient(connectionString);
+    }
+    
+    public async Task<string> AddFileAndGetUrlAsync(
+        string containerName, 
+        string fileName, 
+        Stream fileStream, 
+        CancellationToken ct)
+    {
+        // Get or create container
+        BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
+        await container.CreateIfNotExistsAsync(cancellationToken: ct);
+        
+        // Upload blob
+        BlobClient blobClient = container.GetBlobClient(fileName);
+        await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: ct);
+
+        await fileStream.DisposeAsync();
+        
+        return blobClient.Uri.ToString();
+    }
+
+    public string GetFileUrl(string containerName, string fileName, CancellationToken ct)
+    {
+        BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
+        BlobClient blob = container.GetBlobClient(fileName);
+        
+        return blob.Uri.ToString();
+    }
+
+    public async Task DeleteFileAsync(
+        string containerName, 
+        string fileName, 
+        CancellationToken ct)
+    {
+        BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
+        BlobClient blobClient = container.GetBlobClient(fileName);
+        
+        await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+    }
+}
+```
+
+### Repository Interface
+
+```csharp Media.Domain/Interfaces/IAzureBlobRepository.cs
+public interface IAzureBlobRepository
+{
+    Task<string> AddFileAndGetUrlAsync(
+        string containerName, 
+        string fileName, 
+        Stream fileStream, 
+        CancellationToken ct);
+    
+    string GetFileUrl(
+        string containerName, 
+        string fileName, 
+        CancellationToken ct);
+    
+    Task DeleteFileAsync(
+        string containerName, 
+        string fileName, 
+        CancellationToken ct);
+}
+```
+
+### Media Service
+
+Application service orchestrates blob operations:
+
+```csharp Media.Application/Services/MediaService.cs
+public class MediaService
+{
+    private readonly IAzureBlobRepository _blobRepository;
+    private readonly IBlobResourceRepository _blobResourceRepository;
+    
+    public async Task<Result<BlobResourceDto>> UploadFileAsync(
+        IFormFile file,
+        BlobResourceType resourceType,
+        Guid ownerId,
+        CancellationToken ct)
+    {
+        // 1. Validate file
+        if (file.Length == 0)
+            return Result<BlobResourceDto>.Failure("File is empty");
+        
+        if (file.Length > 10 * 1024 * 1024) // 10MB
+            return Result<BlobResourceDto>.Failure("File too large");
+        
+        // 2. Validate file type
+        var allowedTypes = new[] { "image/jpeg", "image/png", "image/gif" };
+        if (!allowedTypes.Contains(file.ContentType))
+            return Result<BlobResourceDto>.Failure("Invalid file type");
+        
+        // 3. Generate unique filename
+        string fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+        string containerName = GetContainerName(resourceType);
+        
+        // 4. Upload to Azure
+        string url;
+        using (var stream = file.OpenReadStream())
+        {
+            url = await _blobRepository.AddFileAndGetUrlAsync(
+                containerName,
+                fileName,
+                stream,
+                ct
+            );
+        }
+        
+        // 5. Create database record
+        Result<BlobResource> createResult = BlobResource.Create(
+            fileName,
+            url,
+            resourceType,
+            ownerId
+        );
+        
+        if (createResult.IsFailure)
+            return Result<BlobResourceDto>.Failure(createResult);
+        
+        BlobResource blobResource = createResult.Value!;
+        
+        // 6. Save to database
+        await _blobResourceRepository.AddAsync(blobResource, ct);
+        await _blobResourceRepository.SaveChangesAsync(ct);
+        
+        // 7. Return DTO
+        return Result<BlobResourceDto>.Success(blobResource.ToDto());
+    }
+    
+    private static string GetContainerName(BlobResourceType resourceType)
+    {
+        return resourceType switch
+        {
+            BlobResourceType.ProductImage => "product-images",
+            BlobResourceType.UserAvatar => "user-avatars",
+            BlobResourceType.Video => "videos",
+            _ => throw new ArgumentException("Invalid resource type")
+        };
+    }
+}
+```
+
+## File Upload Flow
+
+<Steps>
+  <Step title="Client Uploads File">
+    Frontend sends multipart form data:
+    
+    ```javascript
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('resourceType', 'ProductImage');
+    formData.append('ownerId', productId);
+    
+    const response = await fetch('/api/media/upload', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    const { url, blobId } = await response.json();
+    ```
+  </Step>
+
+  <Step title="API Endpoint Receives File">
+    ```csharp Media.Endpoints/Endpoints/MediaEndpoints.cs
+    private static async Task<IResult> UploadFile(
+        [FromForm] IFormFile file,
+        [FromForm] string resourceType,
+        [FromForm] Guid ownerId,
+        [FromServices] MediaService mediaService,
+        CancellationToken ct)
+    {
+        var type = Enum.Parse<BlobResourceType>(resourceType);
+        
+        var result = await mediaService.UploadFileAsync(file, type, ownerId, ct);
+        
+        return result.IsSuccess
+            ? Results.Created($"/api/media/{result.Value!.Id}", result.Value)
+            : Results.BadRequest(result.ErrorMessage);
+    }
+    ```
+  </Step>
+
+  <Step title="File Uploaded to Azure">
+    Service uploads file to Azure Blob Storage and returns public URL.
+  </Step>
+
+  <Step title="Database Record Created">
+    Blob metadata saved to PostgreSQL:
+    ```sql
+    INSERT INTO media.blob_resources (id, filename, url, resource_type, owner_id)
+    VALUES (uuid, 'abc123.jpg', 'https://...', 'ProductImage', owner_id);
+    ```
+  </Step>
+</Steps>
+
+## Container Organization
+
+Files are organized in containers by type:
+
+```
+wolfixstorage (Storage Account)
+├── product-images/
+│   ├── abc123.jpg
+│   ├── def456.png
+│   └── ghi789.jpg
+├── user-avatars/
+│   ├── user1.jpg
+│   └── user2.png
+└── videos/
+    ├── demo.mp4
+    └── tutorial.mp4
+```
+
+## File Deletion
+
+Delete files from both Azure and database:
+
+```csharp Media.Application/Services/MediaService.cs
+public async Task<VoidResult> DeleteFileAsync(Guid blobId, CancellationToken ct)
+{
+    // 1. Get blob resource
+    BlobResource? blobResource = await _blobResourceRepository.GetByIdAsync(blobId, ct);
+    
+    if (blobResource == null)
+        return VoidResult.Failure("Blob not found", HttpStatusCode.NotFound);
+    
+    // 2. Delete from Azure
+    string containerName = GetContainerName(blobResource.ResourceType);
+    await _blobRepository.DeleteFileAsync(
+        containerName,
+        blobResource.FileName,
+        ct
+    );
+    
+    // 3. Delete from database
+    await _blobResourceRepository.DeleteAsync(blobResource, ct);
+    await _blobResourceRepository.SaveChangesAsync(ct);
+    
+    return VoidResult.Success();
+}
+```
+
+## Advanced Features
+
+### Generate SAS Tokens
+
+For temporary access to private blobs:
+
+```csharp
+using Azure.Storage.Sas;
+
+public string GenerateSasUrl(string containerName, string fileName, TimeSpan validity)
+{
+    BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
+    BlobClient blob = container.GetBlobClient(fileName);
+    
+    var sasBuilder = new BlobSasBuilder
+    {
+        BlobContainerName = containerName,
+        BlobName = fileName,
+        Resource = "b",
+        ExpiresOn = DateTimeOffset.UtcNow.Add(validity)
+    };
+    
+    sasBuilder.SetPermissions(BlobSasPermissions.Read);
+    
+    Uri sasUri = blob.GenerateSasUri(sasBuilder);
+    return sasUri.ToString();
+}
+```
+
+### Set Blob Metadata
+
+```csharp
+public async Task SetMetadataAsync(
+    string containerName, 
+    string fileName, 
+    Dictionary<string, string> metadata, 
+    CancellationToken ct)
+{
+    BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
+    BlobClient blob = container.GetBlobClient(fileName);
+    
+    await blob.SetMetadataAsync(metadata, cancellationToken: ct);
+}
+```
+
+### Copy Blob
+
+```csharp
+public async Task<string> CopyBlobAsync(
+    string sourceContainer,
+    string sourceFileName,
+    string destContainer,
+    string destFileName,
+    CancellationToken ct)
+{
+    BlobClient sourceBlob = _blobServiceClient
+        .GetBlobContainerClient(sourceContainer)
+        .GetBlobClient(sourceFileName);
+    
+    BlobClient destBlob = _blobServiceClient
+        .GetBlobContainerClient(destContainer)
+        .GetBlobClient(destFileName);
+    
+    await destBlob.StartCopyFromUriAsync(sourceBlob.Uri, cancellationToken: ct);
+    
+    return destBlob.Uri.ToString();
+}
+```
+
+## Security
+
+### Private Containers
+
+Make containers private by default:
+
+```csharp
+public async Task CreatePrivateContainerAsync(string containerName, CancellationToken ct)
+{
+    BlobContainerClient container = _blobServiceClient.GetBlobContainerClient(containerName);
+    await container.CreateIfNotExistsAsync(
+        publicAccessType: Azure.Storage.Blobs.Models.PublicAccessType.None,
+        cancellationToken: ct
+    );
+}
+```
+
+### Validate File Types
+
+```csharp
+private static bool IsValidImageType(string contentType)
+{
+    var allowedTypes = new[]
+    {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp"
+    };
+    
+    return allowedTypes.Contains(contentType.ToLower());
+}
+```
+
+### Scan for Malware
+
+Integrate with antivirus service:
+
+```csharp
+public async Task<Result<bool>> ScanFileAsync(Stream fileStream, CancellationToken ct)
+{
+    // Call antivirus API
+    var result = await _antivirusService.ScanAsync(fileStream, ct);
+    return result;
+}
+```
+
+## Cost Optimization
+
+### Use Blob Lifecycle Policies
+
+Archive or delete old files:
+
+```json
+{
+  "rules": [
+    {
+      "name": "archiveOldFiles",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": {
+          "baseBlob": {
+            "tierToArchive": {
+              "daysAfterModificationGreaterThan": 90
+            },
+            "delete": {
+              "daysAfterModificationGreaterThan": 365
+            }
+          }
+        },
+        "filters": {
+          "blobTypes": ["blockBlob"]
+        }
+      }
+    }
+  ]
+}
+```
+
+### Use CDN
+
+Serve static content through Azure CDN:
+
+```bash
+az cdn profile create \
+  --name wolfix-cdn \
+  --resource-group wolfix-rg \
+  --sku Standard_Microsoft
+
+az cdn endpoint create \
+  --name wolfix-media \
+  --profile-name wolfix-cdn \
+  --resource-group wolfix-rg \
+  --origin wolfixstorage.blob.core.windows.net
+```
+
+Update URLs to use CDN:
+```
+https://wolfix-media.azureedge.net/product-images/abc123.jpg
+```
+
+## Troubleshooting
+
+### Connection String Invalid
+
+**Issue:** "No valid combination of account information found."
+
+**Solution:** Verify connection string format:
+```
+DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net
+```
+
+### Container Not Found
+
+**Issue:** "The specified container does not exist."
+
+**Solution:** Ensure `CreateIfNotExistsAsync()` is called:
+```csharp
+await container.CreateIfNotExistsAsync(cancellationToken: ct);
+```
+
+### File Upload Fails
+
+**Issue:** "Request body too large."
+
+**Solution:** Increase max request body size:
+```csharp
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 100 * 1024 * 1024; // 100MB
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Google OAuth" icon="key" href="/integrations/google-oauth">
+    Add Google authentication
+  </Card>
+  
+  <Card title="Toxicity API" icon="shield-alt" href="/integrations/toxicity-api">
+    Content moderation integration
+  </Card>
+</CardGroup>

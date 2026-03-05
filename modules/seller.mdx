@@ -1,0 +1,620 @@
+---
+title: 'Seller Module'
+description: 'Seller accounts, applications, and category management'
+icon: 'store'
+---
+
+## Overview
+
+The **Seller** module manages seller profiles and the seller application process. It handles seller categories (which products they can sell), profile information, and application approval workflows.
+
+## Bounded Context
+
+The Seller module is responsible for:
+
+- Seller profile management (personal info, photo, address)
+- Seller application submission and approval process
+- Seller category management (categories seller can sell in)
+- Seller account lifecycle
+- Seller information lookup for other modules
+
+## Domain Layer
+
+**Location**: `Seller.Domain/`
+
+### Aggregates
+
+#### Seller Aggregate
+
+**Root**: `Seller` entity
+
+```csharp SellerAggregate/Seller.cs
+public sealed class Seller : BaseEntity
+{
+    public string? PhotoUrl { get; private set; }
+    
+    internal FullName FullName { get; private set; }
+    internal PhoneNumber PhoneNumber { get; private set; }
+    internal Address Address { get; private set; }
+    internal BirthDate BirthDate { get; private set; }
+    
+    public Guid AccountId { get; private set; }  // Reference to Identity
+    
+    private readonly List<SellerCategory> _sellerCategories = [];
+    public IReadOnlyCollection<SellerCategoryInfo> SellerCategories => _sellerCategories
+        .Select(sc => (SellerCategoryInfo)sc)
+        .ToList()
+        .AsReadOnly();
+    
+    public static Result<Seller> Create(
+        Guid accountId, string firstName, string lastName, string middleName,
+        string phoneNumber, string city, string street, 
+        uint houseNumber, uint? apartmentNumber, DateOnly birthDate)
+    {
+        if (accountId == Guid.Empty)
+            return Result<Seller>.Failure("Account ID cannot be empty");
+        
+        // Create value objects
+        Result<FullName> fullNameResult = FullName.Create(firstName, lastName, middleName);
+        if (fullNameResult.IsFailure)
+            return Result<Seller>.Failure(fullNameResult);
+        
+        Result<PhoneNumber> phoneNumberResult = PhoneNumber.Create(phoneNumber);
+        if (phoneNumberResult.IsFailure)
+            return Result<Seller>.Failure(phoneNumberResult);
+        
+        Result<Address> addressResult = Address.Create(city, street, houseNumber, apartmentNumber);
+        if (addressResult.IsFailure)
+            return Result<Seller>.Failure(addressResult);
+        
+        Result<BirthDate> birthDateResult = BirthDate.Create(birthDate);
+        if (birthDateResult.IsFailure)
+            return Result<Seller>.Failure(birthDateResult);
+        
+        Seller seller = new(
+            accountId, fullNameResult.Value!, phoneNumberResult.Value!,
+            addressResult.Value!, birthDateResult.Value!);
+        
+        return Result<Seller>.Success(seller);
+    }
+    
+    // Profile management
+    public string GetFullName() => FullName.ToString();
+    public string GetFirstName() => FullName.FirstName;
+    public string GetLastName() => FullName.LastName;
+    public string GetMiddleName() => FullName.MiddleName;
+    public string GetPhoneNumber() => PhoneNumber.Value;
+    public string GetAddress() => Address.ToString();
+    
+    public VoidResult ChangeFullName(string firstName, string lastName, string middleName)
+    {
+        Result<FullName> result = FullName.Create(firstName, lastName, middleName);
+        return result.Map(
+            onSuccess: fullName => { FullName = fullName; return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult ChangePhoneNumber(string phoneNumber)
+    {
+        Result<PhoneNumber> result = PhoneNumber.Create(phoneNumber);
+        return result.Map(
+            onSuccess: phone => { PhoneNumber = phone; return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult ChangeAddress(string city, string street, uint houseNumber, uint? apartmentNumber = null)
+    {
+        Result<Address> result = Address.Create(city, street, houseNumber, apartmentNumber);
+        return result.Map(
+            onSuccess: address => { Address = address; return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult ChangePhotoUrl(string photoUrl)
+    {
+        if (string.IsNullOrWhiteSpace(photoUrl))
+            return VoidResult.Failure("Photo URL is required");
+        
+        PhotoUrl = photoUrl;
+        return VoidResult.Success();
+    }
+    
+    // Category management
+    public VoidResult AddCategory(Guid categoryId, string categoryName)
+    {
+        if (_sellerCategories.Any(sc => sc.CategoryId == categoryId))
+            return VoidResult.Failure("Category already exists", HttpStatusCode.Conflict);
+        
+        Result<SellerCategory> result = SellerCategory.Create(this, categoryId, categoryName);
+        return result.Map(
+            onSuccess: category => { _sellerCategories.Add(category); return VoidResult.Success(); },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage)
+        );
+    }
+    
+    public VoidResult RemoveCategory(Guid categoryId)
+    {
+        SellerCategory? category = _sellerCategories.FirstOrDefault(sc => sc.CategoryId == categoryId);
+        if (category == null)
+            return VoidResult.Failure("Category not found", HttpStatusCode.NotFound);
+        
+        _sellerCategories.Remove(category);
+        return VoidResult.Success();
+    }
+}
+```
+
+**Child Entities**:
+
+```csharp Entities/SellerCategory.cs
+public sealed class SellerCategory : BaseEntity
+{
+    public Seller Seller { get; private set; }
+    public Guid CategoryId { get; private set; }  // Reference to Catalog category
+    public string CategoryName { get; private set; }
+    
+    public static Result<SellerCategory> Create(
+        Seller seller, Guid categoryId, string categoryName)
+    {
+        if (categoryId == Guid.Empty)
+            return Result<SellerCategory>.Failure("Category ID is required");
+        if (string.IsNullOrWhiteSpace(categoryName))
+            return Result<SellerCategory>.Failure("Category name is required");
+        
+        return Result<SellerCategory>.Success(
+            new SellerCategory(seller, categoryId, categoryName));
+    }
+}
+```
+
+#### SellerApplication Aggregate
+
+**Root**: `SellerApplication` entity
+
+```csharp SellerApplicationAggregate/SellerApplication.cs
+public sealed class SellerApplication : BaseEntity
+{
+    public Guid AccountId { get; private set; }
+    public SellerProfileData ProfileData { get; private set; }
+    public SellerApplicationStatus Status { get; private set; }
+    public DateTime CreatedAt { get; private set; } = DateTime.UtcNow;
+    public DateTime? ReviewedAt { get; private set; }
+    public string? RejectionReason { get; private set; }
+    
+    private readonly List<Guid> _categoryIds = [];
+    public IReadOnlyCollection<Guid> CategoryIds => _categoryIds.AsReadOnly();
+    
+    private SellerApplication() { }
+    
+    private SellerApplication(
+        Guid accountId, SellerProfileData profileData, IReadOnlyCollection<Guid> categoryIds)
+    {
+        AccountId = accountId;
+        ProfileData = profileData;
+        Status = SellerApplicationStatus.Pending;
+        _categoryIds.AddRange(categoryIds);
+    }
+    
+    public static Result<SellerApplication> Create(
+        Guid accountId, string firstName, string lastName, string middleName,
+        string phoneNumber, string city, string street, 
+        uint houseNumber, uint? apartmentNumber, DateOnly birthDate,
+        IReadOnlyCollection<Guid> categoryIds)
+    {
+        if (accountId == Guid.Empty)
+            return Result<SellerApplication>.Failure("Account ID cannot be empty");
+        
+        if (categoryIds == null || categoryIds.Count == 0)
+            return Result<SellerApplication>.Failure("At least one category is required");
+        
+        Result<SellerProfileData> profileDataResult = SellerProfileData.Create(
+            firstName, lastName, middleName, phoneNumber, 
+            city, street, houseNumber, apartmentNumber, birthDate);
+        
+        if (profileDataResult.IsFailure)
+            return Result<SellerApplication>.Failure(profileDataResult);
+        
+        var application = new SellerApplication(
+            accountId, profileDataResult.Value!, categoryIds);
+        
+        return Result<SellerApplication>.Success(application, HttpStatusCode.Created);
+    }
+    
+    public VoidResult Approve()
+    {
+        if (Status != SellerApplicationStatus.Pending)
+            return VoidResult.Failure("Application is not pending");
+        
+        Status = SellerApplicationStatus.Approved;
+        ReviewedAt = DateTime.UtcNow;
+        return VoidResult.Success();
+    }
+    
+    public VoidResult Reject(string reason)
+    {
+        if (Status != SellerApplicationStatus.Pending)
+            return VoidResult.Failure("Application is not pending");
+        
+        if (string.IsNullOrWhiteSpace(reason))
+            return VoidResult.Failure("Rejection reason is required");
+        
+        Status = SellerApplicationStatus.Rejected;
+        RejectionReason = reason;
+        ReviewedAt = DateTime.UtcNow;
+        return VoidResult.Success();
+    }
+}
+```
+
+**Value Objects**:
+
+```csharp ValueObjects/SellerProfileData.cs
+public sealed class SellerProfileData
+{
+    public string FirstName { get; private set; }
+    public string LastName { get; private set; }
+    public string MiddleName { get; private set; }
+    public string PhoneNumber { get; private set; }
+    public string City { get; private set; }
+    public string Street { get; private set; }
+    public uint HouseNumber { get; private set; }
+    public uint? ApartmentNumber { get; private set; }
+    public DateOnly BirthDate { get; private set; }
+    
+    public static Result<SellerProfileData> Create(
+        string firstName, string lastName, string middleName, string phoneNumber,
+        string city, string street, uint houseNumber, uint? apartmentNumber, DateOnly birthDate)
+    {
+        // Validation
+        if (string.IsNullOrWhiteSpace(firstName))
+            return Result<SellerProfileData>.Failure("First name is required");
+        
+        // Age validation (must be 18+)
+        int age = DateTime.UtcNow.Year - birthDate.Year;
+        if (age < 18)
+            return Result<SellerProfileData>.Failure("Seller must be at least 18 years old");
+        
+        return Result<SellerProfileData>.Success(
+            new SellerProfileData(firstName, lastName, middleName, phoneNumber, 
+                city, street, houseNumber, apartmentNumber, birthDate));
+    }
+}
+```
+
+**Enums**:
+
+```csharp Enums/SellerApplicationStatus.cs
+public enum SellerApplicationStatus
+{
+    Pending,
+    Approved,
+    Rejected
+}
+
+public enum SellerStatus
+{
+    Active,
+    Suspended,
+    Banned
+}
+```
+
+### Domain Services
+
+```csharp Services/SellerDomainService.cs
+public class SellerDomainService
+{
+    public async Task<VoidResult> ValidateCategoriesExist(
+        IReadOnlyCollection<Guid> categoryIds,
+        CancellationToken ct)
+    {
+        foreach (var categoryId in categoryIds)
+        {
+            Result<bool> categoryExistsResult = await _eventBus
+                .PublishWithSingleResultAsync<CheckCategoryExists, bool>(
+                    new CheckCategoryExists(categoryId), ct);
+            
+            if (categoryExistsResult.IsFailure || !categoryExistsResult.Value)
+                return VoidResult.Failure(
+                    $"Category {categoryId} not found", HttpStatusCode.NotFound);
+        }
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+## Application Layer
+
+**Location**: `Seller.Application/`
+
+### Services
+
+```csharp Services/SellerApplicationService.cs
+public sealed class SellerApplicationService
+{
+    public async Task<Result<Guid>> SubmitApplicationAsync(
+        SubmitSellerApplicationDto dto,
+        Guid accountId,
+        CancellationToken ct)
+    {
+        // Validate categories exist
+        VoidResult validateResult = await _sellerDomainService
+            .ValidateCategoriesExist(dto.CategoryIds, ct);
+        if (validateResult.IsFailure)
+            return Result<Guid>.Failure(validateResult);
+        
+        // Check if application already exists for this account
+        bool hasExistingApplication = await _applicationRepository
+            .HasPendingApplicationAsync(accountId, ct);
+        if (hasExistingApplication)
+            return Result<Guid>.Failure(
+                "You already have a pending application", HttpStatusCode.Conflict);
+        
+        // Create application
+        Result<SellerApplication> createResult = SellerApplication.Create(
+            accountId, dto.FirstName, dto.LastName, dto.MiddleName,
+            dto.PhoneNumber, dto.City, dto.Street, 
+            dto.HouseNumber, dto.ApartmentNumber, dto.BirthDate,
+            dto.CategoryIds);
+        
+        if (createResult.IsFailure)
+            return Result<Guid>.Failure(createResult);
+        
+        SellerApplication application = createResult.Value!;
+        
+        await _applicationRepository.AddAsync(application, ct);
+        await _applicationRepository.SaveChangesAsync(ct);
+        
+        return Result<Guid>.Success(application.Id);
+    }
+    
+    public async Task<VoidResult> ApproveApplicationAsync(
+        Guid applicationId,
+        CancellationToken ct)
+    {
+        SellerApplication? application = await _applicationRepository
+            .GetByIdAsync(applicationId, ct);
+        if (application == null)
+            return VoidResult.Failure("Application not found", HttpStatusCode.NotFound);
+        
+        // Approve application
+        VoidResult approveResult = application.Approve();
+        if (approveResult.IsFailure)
+            return approveResult;
+        
+        await _applicationRepository.SaveChangesAsync(ct);
+        
+        // Publish event to Identity to add seller role
+        await _eventBus.PublishWithoutResultAsync(
+            new SellerApplicationApproved(application.AccountId), ct);
+        
+        // Create seller entity
+        Result<Seller> createSellerResult = Seller.Create(
+            application.AccountId,
+            application.ProfileData.FirstName,
+            application.ProfileData.LastName,
+            application.ProfileData.MiddleName,
+            application.ProfileData.PhoneNumber,
+            application.ProfileData.City,
+            application.ProfileData.Street,
+            application.ProfileData.HouseNumber,
+            application.ProfileData.ApartmentNumber,
+            application.ProfileData.BirthDate);
+        
+        if (createSellerResult.IsFailure)
+            return VoidResult.Failure(createSellerResult);
+        
+        Seller seller = createSellerResult.Value!;
+        
+        // Add categories
+        foreach (var categoryId in application.CategoryIds)
+        {
+            // Fetch category name
+            Result<string> categoryNameResult = await _eventBus
+                .PublishWithSingleResultAsync<FetchCategoryName, string>(
+                    new FetchCategoryName(categoryId), ct);
+            
+            seller.AddCategory(categoryId, categoryNameResult.Value!);
+        }
+        
+        await _sellerRepository.AddAsync(seller, ct);
+        await _sellerRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+    
+    public async Task<VoidResult> RejectApplicationAsync(
+        Guid applicationId,
+        string reason,
+        CancellationToken ct)
+    {
+        SellerApplication? application = await _applicationRepository
+            .GetByIdAsync(applicationId, ct);
+        if (application == null)
+            return VoidResult.Failure("Application not found", HttpStatusCode.NotFound);
+        
+        VoidResult rejectResult = application.Reject(reason);
+        if (rejectResult.IsFailure)
+            return rejectResult;
+        
+        await _applicationRepository.SaveChangesAsync(ct);
+        return VoidResult.Success();
+    }
+}
+```
+
+```csharp Services/SellerService.cs
+public sealed class SellerService
+{
+    public async Task<Result<SellerDto>> GetSellerProfileAsync(
+        Guid accountId,
+        CancellationToken ct)
+    {
+        Seller? seller = await _sellerRepository.GetByAccountIdAsync(accountId, ct);
+        if (seller == null)
+            return Result<SellerDto>.Failure("Seller not found", HttpStatusCode.NotFound);
+        
+        var dto = seller.ToDto();
+        return Result<SellerDto>.Success(dto);
+    }
+}
+```
+
+### Integration Event Handlers
+
+```csharp EventHandlers/FetchSellerInformationHandler.cs
+public class FetchSellerInformationHandler : 
+    IIntegrationEventHandler<FetchSellerInformation, SellerInfoDto>
+{
+    public async Task<Result<SellerInfoDto>> HandleAsync(
+        FetchSellerInformation @event, 
+        CancellationToken ct)
+    {
+        Seller? seller = await _sellerRepository.GetByIdAsync(@event.SellerId, ct);
+        if (seller == null)
+            return Result<SellerInfoDto>.Failure(
+                "Seller not found", HttpStatusCode.NotFound);
+        
+        var dto = new SellerInfoDto
+        {
+            Id = seller.Id,
+            FullName = seller.GetFullName(),
+            PhoneNumber = seller.GetPhoneNumber()
+        };
+        
+        return Result<SellerInfoDto>.Success(dto);
+    }
+}
+```
+
+## Infrastructure Layer
+
+**Location**: `Seller.Infrastructure/`
+
+### Repository Implementation
+
+```csharp Repositories/SellerRepository.cs
+public class SellerRepository : BaseRepository<SellerContext, Seller>, ISellerRepository
+{
+    public async Task<Seller?> GetByAccountIdAsync(Guid accountId, CancellationToken ct)
+    {
+        return await _context.Sellers
+            .Include(s => s.SellerCategories)
+            .FirstOrDefaultAsync(s => s.AccountId == accountId, ct);
+    }
+    
+    public async Task<IReadOnlyCollection<SellerProjection>> GetAllAsync(CancellationToken ct)
+    {
+        return await _context.Sellers
+            .AsNoTracking()
+            .Select(s => new SellerProjection
+            {
+                Id = s.Id,
+                FullName = s.FullName.ToString(),
+                PhoneNumber = s.PhoneNumber.Value,
+                Address = s.Address.ToString()
+            })
+            .ToListAsync(ct);
+    }
+}
+```
+
+### EF Core Configurations
+
+```csharp Configurations/SellerConfiguration.cs
+public class SellerConfiguration : IEntityTypeConfiguration<Seller>
+{
+    public void Configure(EntityTypeBuilder<Seller> builder)
+    {
+        builder.HasKey(s => s.Id);
+        
+        builder.Property(s => s.PhotoUrl).HasMaxLength(500);
+        
+        builder.OwnsOne(s => s.FullName, fn =>
+        {
+            fn.Property(f => f.FirstName).HasMaxLength(100).IsRequired();
+            fn.Property(f => f.LastName).HasMaxLength(100).IsRequired();
+            fn.Property(f => f.MiddleName).HasMaxLength(100);
+        });
+        
+        builder.OwnsOne(s => s.PhoneNumber, pn =>
+        {
+            pn.Property(p => p.Value).HasMaxLength(20).IsRequired();
+        });
+        
+        builder.OwnsOne(s => s.Address);
+        builder.OwnsOne(s => s.BirthDate);
+        
+        builder.HasMany(s => s.SellerCategories)
+            .WithOne(sc => sc.Seller)
+            .HasForeignKey("SellerId")
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+```
+
+## Endpoints Layer
+
+**Location**: `Seller.Endpoints/`
+
+```csharp Endpoints/SellerEndpoints.cs
+internal static class SellerEndpoints
+{
+    public static void MapSellerEndpoints(this IEndpointRouteBuilder app)
+    {
+        var sellerGroup = app.MapGroup("api/sellers")
+            .WithTags("Sellers");
+        
+        // Applications
+        sellerGroup.MapPost("applications", SubmitApplication)
+            .RequireAuthorization("Customer")
+            .WithSummary("Submit seller application");
+        
+        sellerGroup.MapGet("applications", GetAllApplications)
+            .RequireAuthorization("Admin")
+            .WithSummary("Get all pending applications");
+        
+        sellerGroup.MapPost("applications/{id:guid}/approve", ApproveApplication)
+            .RequireAuthorization("Admin")
+            .WithSummary("Approve seller application");
+        
+        sellerGroup.MapPost("applications/{id:guid}/reject", RejectApplication)
+            .RequireAuthorization("Admin")
+            .WithSummary("Reject seller application");
+        
+        // Profile
+        sellerGroup.MapGet("profile", GetProfile)
+            .RequireAuthorization("Seller")
+            .WithSummary("Get seller profile");
+        
+        sellerGroup.MapPatch("profile/full-name", ChangeFullName)
+            .RequireAuthorization("Seller")
+            .WithSummary("Update full name");
+    }
+}
+```
+
+## Integration Events
+
+### Published
+
+```csharp Seller.IntegrationEvents/
+public record SellerApplicationApproved(Guid AccountId) : IIntegrationEvent;
+public record CheckSellerExistsForProductAddition(Guid SellerId) : IIntegrationEvent;
+public record FetchSellerInformation(Guid SellerId) : IIntegrationEvent;
+```
+
+### Consumed
+
+- `CheckCategoryExists` - From Catalog module
+- `FetchCategoryName` - From Catalog module
+
+## Related Modules
+
+- **Identity** - Seller role added when application approved
+- **Catalog** - Sellers create products in their approved categories
+- **Admin** - Admins review and approve/reject applications

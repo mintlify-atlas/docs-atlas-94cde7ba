@@ -1,0 +1,489 @@
+---
+title: 'Wishlist'
+description: 'Manage customer wishlist (favorite products)'
+---
+
+## Get Wishlist Items (Customer)
+
+<api method="GET" path="/api/customers/favorites/{customerId}" auth="Customer" />
+
+Retrieves all products in the customer's wishlist.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier (must match authenticated user)
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of wishlist item objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Wishlist items retrieved
+- `404 Not Found` - Customer not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET "https://your-server.com/api/customers/favorites/customer-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/customers/favorites/${customerId}`,
+  {
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+const wishlist = await response.json();
+console.log(`Wishlist has ${wishlist.length} items`);
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    f'https://your-server.com/api/customers/favorites/{customer_id}',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+wishlist = response.json()
+print(f"Wishlist has {len(wishlist)} items")
+for item in wishlist:
+    print(f"- {item['productName']} (${item['price']})")
+```
+
+</CodeGroup>
+
+### Success Response
+
+```json
+[
+  {
+    "id": "favorite-item-1",
+    "productId": "product-uuid",
+    "productName": "Premium Wireless Headphones",
+    "productImage": "https://cdn.example.com/products/headphones.jpg",
+    "price": 249.99,
+    "discountPrice": 199.99,
+    "inStock": true,
+    "sellerId": "seller-uuid",
+    "sellerName": "AudioPro Shop",
+    "averageRating": 4.5,
+    "addedAt": "2024-01-10T15:30:00Z"
+  },
+  {
+    "id": "favorite-item-2",
+    "productId": "product-uuid-2",
+    "productName": "Smart Watch Series 5",
+    "productImage": "https://cdn.example.com/products/watch.jpg",
+    "price": 399.99,
+    "discountPrice": null,
+    "inStock": true,
+    "sellerId": "seller-uuid-2",
+    "sellerName": "TechGadgets",
+    "averageRating": 4.7,
+    "addedAt": "2024-01-12T10:15:00Z"
+  }
+]
+```
+
+---
+
+## Add Product to Wishlist (Customer)
+
+<api method="POST" path="/api/customers/favorites" auth="Customer" />
+
+Adds a product to the customer's wishlist.
+
+### Request Body
+
+<ParamField body="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+<ParamField body="productId" type="string (uuid)" required>
+  Product to add to wishlist
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Product added to wishlist
+- `404 Not Found` - Product or customer not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/customers/favorites" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "customer-uuid",
+    "productId": "product-uuid"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://your-server.com/api/customers/favorites',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      customerId: customerId,
+      productId: productId
+    })
+  }
+);
+
+if (response.status === 204) {
+  console.log('Product added to wishlist');
+}
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/customers/favorites',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    json={
+        'customerId': customer_id,
+        'productId': product_id
+    }
+)
+
+if response.status_code == 204:
+    print('Product added to wishlist')
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("Authorization", $"Bearer {jwtToken}");
+
+var request = new {
+    CustomerId = customerId,
+    ProductId = productId
+};
+
+var response = await client.PostAsJsonAsync(
+    "https://your-server.com/api/customers/favorites",
+    request
+);
+
+if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+{
+    Console.WriteLine("Product added to wishlist");
+}
+```
+
+</CodeGroup>
+
+---
+
+## Remove Product from Wishlist (Customer)
+
+<api method="DELETE" path="/api/customers/favorites/{customerId}/{favoriteItemId}" auth="Customer" />
+
+Removes a product from the customer's wishlist.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+<ParamField path="favoriteItemId" type="string (uuid)" required>
+  Favorite item identifier to remove
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Product removed from wishlist
+- `404 Not Found` - Customer or favorite item not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE "https://your-server.com/api/customers/favorites/customer-uuid/favorite-item-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/customers/favorites/${customerId}/${favoriteItemId}`,
+  {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+if (response.status === 204) {
+  console.log('Product removed from wishlist');
+}
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    f'https://your-server.com/api/customers/favorites/{customer_id}/{favorite_item_id}',
+    headers={'Authorization': f'Bearer {jwt_token}'}
+)
+
+if response.status_code == 204:
+    print('Product removed from wishlist')
+```
+
+</CodeGroup>
+
+---
+
+## Wishlist Management
+
+### Wishlist Behavior
+
+<Info>
+  **Duplicates**: Adding a product already in the wishlist has no effect (idempotent operation).
+</Info>
+
+<Info>
+  **Persistence**: Wishlist items are stored permanently until explicitly removed by the customer.
+</Info>
+
+<Info>
+  **Stock Notifications**: Consider implementing price drop or back-in-stock notifications for wishlist items.
+</Info>
+
+### Complete Wishlist Implementation
+
+```javascript
+// Add product to wishlist with UI feedback
+async function addToWishlist(productId) {
+  try {
+    const response = await fetch('/api/customers/favorites', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        customerId: customerId,
+        productId: productId
+      })
+    });
+    
+    if (response.status === 204) {
+      // Update UI - change heart icon to filled
+      updateWishlistIcon(productId, true);
+      showNotification('Added to wishlist');
+      
+      // Refresh wishlist count in header
+      await updateWishlistCount();
+    }
+  } catch (error) {
+    console.error('Failed to add to wishlist:', error);
+    showError('Failed to add to wishlist');
+  }
+}
+
+// Remove from wishlist
+async function removeFromWishlist(favoriteItemId, productId) {
+  try {
+    const response = await fetch(
+      `/api/customers/favorites/${customerId}/${favoriteItemId}`,
+      {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }
+    );
+    
+    if (response.status === 204) {
+      // Update UI
+      updateWishlistIcon(productId, false);
+      showNotification('Removed from wishlist');
+      
+      // Refresh wishlist count
+      await updateWishlistCount();
+    }
+  } catch (error) {
+    console.error('Failed to remove from wishlist:', error);
+    showError('Failed to remove from wishlist');
+  }
+}
+
+// Load wishlist page
+async function loadWishlistPage() {
+  try {
+    const response = await fetch(
+      `/api/customers/favorites/${customerId}`,
+      {
+        headers: { 'Authorization': `Bearer ${token}` }
+      }
+    );
+    
+    const wishlist = await response.json();
+    
+    if (wishlist.length === 0) {
+      displayEmptyWishlist();
+    } else {
+      displayWishlistItems(wishlist);
+    }
+  } catch (error) {
+    console.error('Failed to load wishlist:', error);
+    showError('Failed to load wishlist');
+  }
+}
+
+// Get wishlist count for header badge
+async function updateWishlistCount() {
+  const response = await fetch(
+    `/api/customers/favorites/${customerId}`,
+    {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }
+  );
+  
+  const wishlist = await response.json();
+  updateHeaderBadge('wishlist', wishlist.length);
+}
+
+// Toggle wishlist (add or remove)
+async function toggleWishlist(productId) {
+  // First check if already in wishlist
+  const response = await fetch(
+    `/api/customers/favorites/${customerId}`,
+    {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }
+  );
+  
+  const wishlist = await response.json();
+  const existing = wishlist.find(item => item.productId === productId);
+  
+  if (existing) {
+    await removeFromWishlist(existing.id, productId);
+  } else {
+    await addToWishlist(productId);
+  }
+}
+```
+
+### Wishlist to Cart Flow
+
+```javascript
+// Move wishlist item to cart
+async function moveToCart(favoriteItem) {
+  // Add to cart
+  const addResponse = await fetch('/api/customers/cart-items', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      customerId: customerId,
+      productId: favoriteItem.productId,
+      quantity: 1,
+      variantId: null
+    })
+  });
+  
+  if (addResponse.status === 204) {
+    // Optionally remove from wishlist
+    await removeFromWishlist(favoriteItem.id, favoriteItem.productId);
+    
+    showNotification('Added to cart');
+    window.location.href = '/cart';
+  }
+}
+```
+
+### Price Drop Notifications
+
+```javascript
+// Check for price drops on wishlist items
+async function checkPriceDrops() {
+  const wishlist = await loadWishlist();
+  
+  for (const item of wishlist) {
+    // Fetch current product price
+    const productResponse = await fetch(
+      `/api/products/product/${item.productId}`
+    );
+    const product = await productResponse.json();
+    
+    // Check if price dropped
+    const currentPrice = product.discountPrice || product.price;
+    if (currentPrice < item.price) {
+      const savings = item.price - currentPrice;
+      notifyUser(
+        `Price drop! ${item.productName} is now $${currentPrice} (save $${savings})`
+      );
+    }
+  }
+}
+```
+
+### Stock Availability Check
+
+```javascript
+// Check stock for wishlist items
+async function checkWishlistStock() {
+  const wishlist = await loadWishlist();
+  
+  return wishlist.map(item => ({
+    ...item,
+    canPurchase: item.inStock && item.availableQuantity > 0
+  }));
+}
+```
+
+## Use Cases
+
+### Save for Later
+Customers can save products they're interested in but not ready to purchase.
+
+### Gift Ideas
+Share wishlist with friends and family for gift-giving occasions.
+
+### Price Tracking
+Monitor products for price drops or sales.
+
+### Comparison Shopping
+Collect multiple options to compare before making a decision.
+
+## Best Practices
+
+<Info>
+  Display wishlist count in the header/navigation to encourage engagement.
+</Info>
+
+<Info>
+  Allow customers to add items to cart directly from the wishlist page.
+</Info>
+
+<Warning>
+  Show stock status on wishlist items - products may sell out while in wishlist.
+</Warning>

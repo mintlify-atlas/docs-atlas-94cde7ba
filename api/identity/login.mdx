@@ -1,0 +1,206 @@
+---
+title: 'Login'
+description: 'Authenticate and get user roles'
+---
+
+## Login and Get Roles
+
+<api method="POST" path="/api/account/roles" auth="none" />
+
+Authenticates a user with email and password, returning all available roles for the account.
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  User's registered email address
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  User's password
+</ParamField>
+
+### Response
+
+<ResponseField name="accountId" type="string (uuid)">
+  Unique identifier for the user account
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  User's email address
+</ResponseField>
+
+<ResponseField name="roles" type="array<string>">
+  List of roles assigned to this account (e.g., ["Customer"], ["Customer", "Seller"])
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Authentication successful
+- `400 Bad Request` - Invalid request format
+- `403 Forbidden` - Account locked or disabled
+- `404 Not Found` - Email not found or incorrect password
+- `500 Internal Server Error` - Server error
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/account/roles" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "SecurePass123!"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/account/roles', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    email: 'user@example.com',
+    password: 'SecurePass123!'
+  })
+});
+
+const userRoles = await response.json();
+console.log('Account ID:', userRoles.accountId);
+console.log('Roles:', userRoles.roles);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/account/roles',
+    json={
+        'email': 'user@example.com',
+        'password': 'SecurePass123!'
+    }
+)
+
+user_roles = response.json()
+print(f"Account ID: {user_roles['accountId']}")
+print(f"Roles: {user_roles['roles']}")
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+var request = new { Email = "user@example.com", Password = "SecurePass123!" };
+
+var response = await client.PostAsJsonAsync(
+    "https://your-server.com/api/account/roles",
+    request
+);
+
+var userRoles = await response.Content.ReadFromJsonAsync<UserRolesDto>();
+Console.WriteLine($"Account ID: {userRoles.AccountId}");
+Console.WriteLine($"Roles: {string.Join(", ", userRoles.Roles)}");
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+{
+  "accountId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "user@example.com",
+  "roles": ["Customer", "Seller"]
+}
+```
+
+### Error Response Examples
+
+**Invalid Credentials (404 Not Found):**
+```json
+"Invalid email or password"
+```
+
+**Account Locked (403 Forbidden):**
+```json
+"Account has been locked due to multiple failed login attempts"
+```
+
+## Get Token by Role
+
+<api method="POST" path="/api/account/token" auth="none" />
+
+After receiving available roles, select a specific role to get a JWT token.
+
+### Request Body
+
+<ParamField body="accountId" type="string (uuid)" required>
+  Account ID received from the login/roles endpoint
+</ParamField>
+
+<ParamField body="role" type="string" required>
+  Role to authenticate as (must be one of the roles returned from /api/account/roles)
+</ParamField>
+
+### Response
+
+<ResponseField name="token" type="string">
+  JWT authentication token for the selected role
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Token generated successfully
+- `400 Bad Request` - Invalid role or account ID
+- `403 Forbidden` - User doesn't have the requested role
+- `404 Not Found` - Account not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/account/token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "accountId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "role": "Customer"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/account/token', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    accountId: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+    role: 'Customer'
+  })
+});
+
+const token = await response.json();
+console.log('JWT Token:', token);
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzZmE4NWY2NC01NzE3LTQ1NjItYjNmYy0yYzk2M2Y2NmFmYTYiLCJyb2xlIjoiQ3VzdG9tZXIiLCJpYXQiOjE1MTYyMzkwMjJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+```
+
+## Next Steps
+
+After successful login:
+
+1. Store the JWT token securely
+2. Include the token in the Authorization header for subsequent requests
+3. Use role-specific endpoints based on your selected role
+
+<Info>
+  Users can have multiple roles. Call the token endpoint again with a different role to switch contexts.
+</Info>

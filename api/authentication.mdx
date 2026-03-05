@@ -1,0 +1,147 @@
+---
+title: 'Authentication'
+description: 'Authentication and authorization in Wolfix.Server API'
+---
+
+## Overview
+
+Wolfix.Server uses JWT (JSON Web Tokens) for authentication. The API supports multiple authentication methods:
+
+- Email/Password authentication
+- Google OAuth authentication
+- Role-based authorization
+
+## Authentication Flow
+
+### 1. Register or Login
+
+First, register a new account or login with existing credentials to receive available roles.
+
+### 2. Get Role-Specific Token
+
+Use the role selection endpoint to get a JWT token for a specific role (Customer, Seller, Admin, etc.).
+
+### 3. Use Token in Requests
+
+Include the JWT token in the Authorization header for authenticated requests:
+
+```bash
+Authorization: Bearer YOUR_JWT_TOKEN
+```
+
+## Authorization Roles
+
+The API supports the following roles:
+
+- **Customer** - Regular customers who can browse and purchase products
+- **Seller** - Sellers who can manage their shops and products
+- **Admin** - Administrators who can manage categories and seller applications
+- **SuperAdmin** - Super administrators with full system access
+- **Support** - Support staff who can manage customer requests
+
+## Token Lifecycle
+
+<Steps>
+  <Step title="Login">
+    Authenticate with email/password or Google to receive a list of available roles
+  </Step>
+  <Step title="Select Role">
+    Choose a role and receive a JWT token for that specific role
+  </Step>
+  <Step title="Make Requests">
+    Include the token in the Authorization header for all authenticated requests
+  </Step>
+  <Step title="Token Expiration">
+    Tokens expire after a configured period. Re-authenticate when needed.
+  </Step>
+</Steps>
+
+## Authentication Methods
+
+### Email/Password
+
+Standard authentication using email and password credentials.
+
+**Endpoint:** `POST /api/account/roles`
+
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "securePassword123"
+}
+```
+
+**Response:**
+```json
+{
+  "accountId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "user@example.com",
+  "roles": ["Customer"]
+}
+```
+
+### Google OAuth
+
+Authenticate using Google Sign-In.
+
+**Endpoint:** `POST /api/account/customer/google`
+
+**Request:**
+```json
+{
+  "idToken": "google_id_token_here"
+}
+```
+
+**Response:**
+```json
+{
+  "accountId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "user@example.com",
+  "roles": ["Customer"]
+}
+```
+
+### Get Role Token
+
+After login, select a role to receive a JWT token.
+
+**Endpoint:** `POST /api/account/token`
+
+**Request:**
+```json
+{
+  "accountId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "role": "Customer"
+}
+```
+
+**Response:**
+```json
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+## Protected Endpoints
+
+Endpoints requiring authentication will return:
+
+- `401 Unauthorized` - Missing or invalid token
+- `403 Forbidden` - Valid token but insufficient permissions
+
+## Security Best Practices
+
+<Warning>
+  Never expose your JWT tokens in client-side code or version control. Always transmit tokens over HTTPS.
+</Warning>
+
+<Info>
+  Tokens should be stored securely on the client side (e.g., in httpOnly cookies or secure storage).
+</Info>
+
+## Example: Authenticated Request
+
+```bash
+curl -X GET "https://your-server.com/api/customers/{customerId}" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```

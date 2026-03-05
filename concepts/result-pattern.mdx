@@ -1,0 +1,624 @@
+---
+title: Result Pattern
+description: Type-safe error handling without exceptions
+---
+
+Wolfix.Server uses the **Result Pattern** for error handling, providing type-safe, explicit error management without throwing exceptions for business logic failures.
+
+## What is the Result Pattern?
+
+The Result Pattern wraps return values and errors in a single type:
+
+```csharp
+Result<Customer> result = customerService.CreateCustomer(...);
+
+if (result.IsSuccess)
+{
+    Customer customer = result.Value;
+    // Work with customer
+}
+else
+{
+    string error = result.ErrorMessage;
+    HttpStatusCode code = result.StatusCode;
+    // Handle error
+}
+```
+
+<Info>
+  Result makes errors explicit and forces callers to handle them - no silent failures or forgotten try-catch blocks.
+</Info>
+
+## Result Types
+
+Wolfix.Server provides two result types:
+
+### 1. Result\<TValue\>
+
+For operations that return a value:
+
+```csharp Shared.Domain/Models/Result.cs
+using System.Net;
+
+namespace Shared.Domain.Models;
+
+public sealed class Result<TValue>
+{
+    public TValue? Value { get; }
+    public string? ErrorMessage { get; }
+    public bool IsSuccess => ErrorMessage == null;
+    public bool IsFailure => !IsSuccess;
+    public HttpStatusCode StatusCode { get; }
+
+    private Result(TValue value, HttpStatusCode statusCode)
+    {
+        Value = value;
+        ErrorMessage = null;
+        StatusCode = statusCode;
+    }
+
+    private Result(string errorMessage, HttpStatusCode statusCode)
+    {
+        Value = default;
+        ErrorMessage = errorMessage;
+        StatusCode = statusCode;
+    }
+
+    public static Result<TValue> Success(TValue value, HttpStatusCode statusCode = HttpStatusCode.OK)
+        => new(value, statusCode);
+
+    public static Result<TValue> Failure(string errorMessage, HttpStatusCode statusCode = HttpStatusCode.BadRequest)
+        => new(errorMessage, statusCode);
+    
+    // Failure from another Result
+    public static Result<TValue> Failure<TResult>(Result<TResult> failedResult)
+    {
+        if (failedResult.IsSuccess) throw new ArgumentException("Result is success", nameof(failedResult));
+        return new Result<TValue>(failedResult.ErrorMessage!, failedResult.StatusCode);
+    }
+
+    // Map for transformations
+    public TResult Map<TResult>(Func<TValue, TResult> onSuccess, Func<string, TResult> onFailure)
+    {
+        return IsSuccess ? onSuccess(Value!) : onFailure(ErrorMessage!);
+    }
+}
+```
+
+### 2. VoidResult
+
+For operations that don't return a value:
+
+```csharp Shared.Domain/Models/VoidResult.cs
+public sealed class VoidResult
+{
+    public string? ErrorMessage { get; }
+    public bool IsSuccess => ErrorMessage == null;
+    public bool IsFailure => !IsSuccess;
+    public HttpStatusCode StatusCode { get; }
+
+    private VoidResult(HttpStatusCode statusCode)
+    {
+        ErrorMessage = null;
+        StatusCode = statusCode;
+    }
+
+    private VoidResult(string errorMessage, HttpStatusCode statusCode)
+    {
+        ErrorMessage = errorMessage;
+        StatusCode = statusCode;
+    }
+
+    public static VoidResult Success(HttpStatusCode statusCode = HttpStatusCode.OK)
+        => new(statusCode);
+
+    public static VoidResult Failure(string errorMessage, HttpStatusCode statusCode = HttpStatusCode.BadRequest)
+        => new(errorMessage, statusCode);
+    
+    public TResult Map<TResult>(Func<TResult> onSuccess, Func<string, TResult> onFailure)
+    {
+        return IsSuccess ? onSuccess() : onFailure(ErrorMessage!);
+    }
+}
+```
+
+## Usage Examples
+
+### Domain Layer
+
+Domain entities use Result to validate business rules:
+
+```csharp Catalog.Domain/ProductAggregate/Product.cs
+public sealed class Product : BaseEntity
+{
+    // Factory method returns Result
+    public static Result<Product> Create(
+        string title, 
+        string description, 
+        decimal price, 
+        ProductStatus status, 
+        Guid categoryId, 
+        Guid sellerId)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return Result<Product>.Failure("Title is required");
+
+        if (price <= 0)
+            return Result<Product>.Failure("Price must be positive");
+
+        if (categoryId == Guid.Empty)
+            return Result<Product>.Failure("Category ID is required");
+
+        var product = new Product(title, description, price, status, categoryId, sellerId);
+        product.RecalculateBonuses();
+        product.FinalPrice = price;
+        
+        return Result<Product>.Success(product, HttpStatusCode.Created);
+    }
+    
+    // Behavior method returns VoidResult
+    public VoidResult ChangePrice(decimal price)
+    {
+        if (price <= 0)
+            return VoidResult.Failure("Price must be positive");
+        
+        Price = price;
+        RecalculateFinalPrice();
+        RecalculateBonuses();
+        
+        return VoidResult.Success();
+    }
+    
+    // Method that composes Results
+    public VoidResult AddReview(string title, string text, uint rating, Guid customerId)
+    {
+        Result<Review> createReviewResult = Review.Create(title, text, rating, this, customerId);
+
+        return createReviewResult.Map(
+            onSuccess: review =>
+            {
+                _reviews.Add(review);
+                RecalculateAverageRating();
+                return VoidResult.Success();
+            },
+            onFailure: errorMessage => VoidResult.Failure(errorMessage, createReviewResult.StatusCode)
+        );
+    }
+}
+```
+
+### Application Layer
+
+Application services compose multiple Results:
+
+```csharp Catalog.Application/Services/ProductService.cs
+public class ProductService
+{
+    private readonly IProductRepository _productRepository;
+    private readonly ICategoryRepository _categoryRepository;
+    private readonly IToxicityService _toxicityService;
+    
+    public async Task<Result<ProductDto>> CreateProductAsync(
+        CreateProductDto dto, 
+        Guid sellerId, 
+        CancellationToken ct)
+    {
+        // 1. Validate category exists
+        var categoryExists = await _categoryRepository.ExistsAsync(dto.CategoryId, ct);
+        if (!categoryExists)
+            return Result<ProductDto>.Failure(
+                "Category not found", 
+                HttpStatusCode.NotFound
+            );
+        
+        // 2. Check for toxic content
+        Result<bool> toxicityResult = await _toxicityService.IsToxic(dto.Title, ct);
+        if (toxicityResult.IsFailure)
+            return Result<ProductDto>.Failure(toxicityResult);
+        
+        if (toxicityResult.Value)
+            return Result<ProductDto>.Failure("Title contains inappropriate content");
+        
+        // 3. Create domain entity (returns Result)
+        Result<Product> createResult = Product.Create(
+            dto.Title,
+            dto.Description,
+            dto.Price,
+            ProductStatus.Draft,
+            dto.CategoryId,
+            sellerId
+        );
+        
+        if (createResult.IsFailure)
+            return Result<ProductDto>.Failure(createResult);
+        
+        Product product = createResult.Value!;
+        
+        // 4. Save to repository
+        await _productRepository.AddAsync(product, ct);
+        await _productRepository.SaveChangesAsync(ct);
+        
+        // 5. Map to DTO and return success
+        ProductDto productDto = product.ToDto();
+        
+        return Result<ProductDto>.Success(productDto, HttpStatusCode.Created);
+    }
+    
+    public async Task<VoidResult> UpdatePriceAsync(
+        Guid productId, 
+        decimal newPrice, 
+        CancellationToken ct)
+    {
+        Product? product = await _productRepository.GetByIdAsync(productId, ct);
+        
+        if (product == null)
+            return VoidResult.Failure("Product not found", HttpStatusCode.NotFound);
+        
+        VoidResult changePriceResult = product.ChangePrice(newPrice);
+        
+        if (changePriceResult.IsFailure)
+            return changePriceResult;
+        
+        await _productRepository.UpdateAsync(product, ct);
+        await _productRepository.SaveChangesAsync(ct);
+        
+        return VoidResult.Success();
+    }
+}
+```
+
+### Presentation Layer (Endpoints)
+
+Endpoints convert Results to HTTP responses:
+
+```csharp Catalog.Endpoints/Endpoints/ProductEndpoints.cs
+private static async Task<IResult> CreateProduct(
+    [FromBody] CreateProductDto dto,
+    [FromServices] ProductService productService,
+    ClaimsPrincipal user,
+    CancellationToken ct)
+{
+    var sellerId = Guid.Parse(user.FindFirst("ProfileId")!.Value);
+    
+    Result<ProductDto> result = await productService.CreateProductAsync(dto, sellerId, ct);
+    
+    return result.IsSuccess
+        ? Results.Created($"/api/products/{result.Value!.Id}", result.Value)
+        : Results.Problem(
+            detail: result.ErrorMessage,
+            statusCode: (int)result.StatusCode
+          );
+}
+
+private static async Task<IResult> UpdatePrice(
+    Guid id,
+    [FromBody] UpdatePriceDto dto,
+    [FromServices] ProductService productService,
+    CancellationToken ct)
+{
+    VoidResult result = await productService.UpdatePriceAsync(id, dto.NewPrice, ct);
+    
+    return result.IsSuccess
+        ? Results.NoContent()
+        : Results.Problem(
+            detail: result.ErrorMessage,
+            statusCode: (int)result.StatusCode
+          );
+}
+```
+
+## Result Chaining
+
+The `Map` method enables functional composition:
+
+```csharp
+public VoidResult ProcessOrder(Guid orderId)
+{
+    Result<Order> getOrderResult = orderRepository.GetById(orderId);
+    
+    return getOrderResult.Map(
+        onSuccess: order =>
+        {
+            VoidResult validateResult = order.Validate();
+            if (validateResult.IsFailure)
+                return validateResult;
+            
+            VoidResult chargeResult = paymentService.Charge(order.TotalAmount);
+            if (chargeResult.IsFailure)
+                return chargeResult;
+            
+            order.MarkAsPaid();
+            return VoidResult.Success();
+        },
+        onFailure: error => VoidResult.Failure(error)
+    );
+}
+```
+
+## Propagating Failures
+
+Result provides helper methods to propagate failures across layers:
+
+```csharp
+// Application service
+public async Task<Result<OrderDto>> CreateOrderAsync(CreateOrderDto dto, CancellationToken ct)
+{
+    // Get customer
+    Result<Customer> customerResult = await customerService.GetCustomerAsync(dto.CustomerId, ct);
+    if (customerResult.IsFailure)
+        return Result<OrderDto>.Failure(customerResult); // Propagate failure
+    
+    // Create order
+    Result<Order> createResult = Order.Create(customerResult.Value!, dto.Items);
+    if (createResult.IsFailure)
+        return Result<OrderDto>.Failure(createResult); // Propagate failure
+    
+    // Save and return
+    await orderRepository.AddAsync(createResult.Value!, ct);
+    return Result<OrderDto>.Success(createResult.Value!.ToDto());
+}
+```
+
+## Integration with External Services
+
+External service calls return Results:
+
+```csharp Catalog.Infrastructure/Services/ToxicityService.cs
+internal sealed class ToxicityService : IToxicityService
+{
+    private readonly HttpClient _httpClient;
+    
+    public async Task<Result<bool>> IsToxic(string text, CancellationToken ct)
+    {
+        try
+        {
+            var payload = new { text };
+            var response = await _httpClient.PostAsJsonAsync("check", payload, ct);
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<bool>(ct);
+            
+            return Result<bool>.Success(result);
+        }
+        catch (HttpRequestException ex)
+        {
+            return Result<bool>.Failure(
+                $"Toxicity service error: {ex.Message}",
+                HttpStatusCode.ServiceUnavailable
+            );
+        }
+        catch (Exception ex)
+        {
+            return Result<bool>.Failure(
+                $"Unexpected error: {ex.Message}",
+                HttpStatusCode.InternalServerError
+            );
+        }
+    }
+}
+```
+
+```csharp Order.Infrastructure/Services/StripePaymentService.cs
+internal sealed class StripePaymentService : IPaymentService<StripePaymentResponse>
+{
+    private readonly StripeClient _stripeClient;
+    
+    public async Task<Result<StripePaymentResponse>> PayAsync(
+        decimal amount, 
+        string currency, 
+        string customerEmail, 
+        CancellationToken ct)
+    {
+        try
+        {
+            var options = new PaymentIntentCreateOptions
+            {
+                Amount = (long)(amount * 100),
+                Currency = currency,
+                ReceiptEmail = customerEmail,
+                PaymentMethodTypes = ["card"]
+            };
+
+            PaymentIntentService service = new(_stripeClient);
+            PaymentIntent intent = await service.CreateAsync(options, cancellationToken: ct);
+
+            return Result<StripePaymentResponse>.Success(new StripePaymentResponse
+            {
+                PaymentIntentId = intent.Id,
+                ClientSecret = intent.ClientSecret
+            });
+        }
+        catch (StripeException ex)
+        {
+            return Result<StripePaymentResponse>.Failure(
+                $"Stripe error: {ex.Message}",
+                HttpStatusCode.InternalServerError
+            );
+        }
+    }
+}
+```
+
+## Benefits
+
+<CardGroup cols={2}>
+  <Card title="Explicit Errors" icon="exclamation-triangle">
+    Errors are visible in method signatures
+  </Card>
+  
+  <Card title="Type Safety" icon="shield">
+    Compiler ensures error handling
+  </Card>
+  
+  <Card title="No Silent Failures" icon="bell">
+    Can't ignore errors - must check IsSuccess
+  </Card>
+  
+  <Card title="Composability" icon="layer-group">
+    Easy to chain operations with Map
+  </Card>
+  
+  <Card title="HTTP Integration" icon="network-wired">
+    StatusCode property maps directly to HTTP responses
+  </Card>
+  
+  <Card title="Testability" icon="vial">
+    Easy to test both success and failure paths
+  </Card>
+</CardGroup>
+
+## Result vs Exceptions
+
+### When to Use Result
+
+- Business rule violations
+- Expected failure conditions
+- Validation errors
+- Domain logic failures
+
+```csharp
+// ✅ Use Result for business logic
+public VoidResult ChangePrice(decimal price)
+{
+    if (price <= 0)
+        return VoidResult.Failure("Price must be positive");
+    
+    Price = price;
+    return VoidResult.Success();
+}
+```
+
+### When to Use Exceptions
+
+- Unexpected errors (infrastructure failures)
+- Programming errors (null reference, index out of range)
+- Configuration errors
+- System failures
+
+```csharp
+// ✅ Use exceptions for unexpected errors
+public class ProductRepository
+{
+    public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        // Let EF Core throw DbUpdateException, SqlException, etc.
+        return await _context.Products.FirstOrDefaultAsync(p => p.Id == id, ct);
+    }
+}
+```
+
+<Warning>
+  Don't use Result for everything - exceptions are still appropriate for truly exceptional situations.
+</Warning>
+
+## Testing with Result
+
+```csharp Catalog.Tests/Domain/ProductTests.cs
+public class ProductTests
+{
+    [Fact]
+    public void Create_WithValidData_ShouldReturnSuccess()
+    {
+        // Arrange
+        var title = "Test Product";
+        var price = 99.99m;
+        
+        // Act
+        Result<Product> result = Product.Create(
+            title, "Description", price, 
+            ProductStatus.Draft, Guid.NewGuid(), Guid.NewGuid()
+        );
+        
+        // Assert
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal(title, result.Value.Title);
+        Assert.Equal(HttpStatusCode.Created, result.StatusCode);
+    }
+    
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public void Create_WithInvalidPrice_ShouldReturnFailure(decimal price)
+    {
+        // Act
+        Result<Product> result = Product.Create(
+            "Title", "Description", price, 
+            ProductStatus.Draft, Guid.NewGuid(), Guid.NewGuid()
+        );
+        
+        // Assert
+        Assert.True(result.IsFailure);
+        Assert.Null(result.Value);
+        Assert.Contains("positive", result.ErrorMessage);
+        Assert.Equal(HttpStatusCode.BadRequest, result.StatusCode);
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Check IsSuccess">
+    Never access `Value` without checking `IsSuccess` first:
+    
+    ```csharp
+    var result = service.CreateProduct(...);
+    
+    if (result.IsSuccess)
+    {
+        var product = result.Value; // Safe
+    }
+    ```
+  </Step>
+
+  <Step title="Use Appropriate Status Codes">
+    Match HTTP status codes to error types:
+    
+    ```csharp
+    // Not found
+    return Result<Product>.Failure("Product not found", HttpStatusCode.NotFound);
+    
+    // Validation error
+    return Result<Product>.Failure("Invalid price", HttpStatusCode.BadRequest);
+    
+    // Conflict
+    return Result<Product>.Failure("Product already exists", HttpStatusCode.Conflict);
+    ```
+  </Step>
+
+  <Step title="Provide Clear Error Messages">
+    Make errors actionable for API consumers:
+    
+    ```csharp
+    // ❌ Bad
+    return VoidResult.Failure("Invalid");
+    
+    // ✅ Good
+    return VoidResult.Failure("Price must be greater than 0");
+    ```
+  </Step>
+
+  <Step title="Use Map for Transformations">
+    Leverage Map for cleaner code:
+    
+    ```csharp
+    return result.Map(
+        onSuccess: value => ProcessValue(value),
+        onFailure: error => HandleError(error)
+    );
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Development Guide" icon="code" href="/guides/development">
+    Start building with Result pattern
+  </Card>
+  
+  <Card title="API Reference" icon="book" href="/api/overview">
+    Explore API endpoints using Result
+  </Card>
+</CardGroup>

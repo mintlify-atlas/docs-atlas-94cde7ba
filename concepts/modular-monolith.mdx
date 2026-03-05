@@ -1,0 +1,457 @@
+---
+title: Modular Monolith Pattern
+description: Understanding the modular monolith architecture in Wolfix.Server
+---
+
+Wolfix.Server implements a **modular monolith** architecture, which combines the organizational benefits of microservices with the simplicity of monolithic deployment.
+
+## What is a Modular Monolith?
+
+A modular monolith is a software architecture where:
+
+- The application is **logically divided** into independent modules
+- Each module has its own domain, business logic, and data
+- Modules **communicate through well-defined contracts** (integration events)
+- Everything is **deployed as a single unit**
+
+<Info>
+  Think of it as "microservices in a monolith" - you get the organizational benefits without the operational complexity.
+</Info>
+
+## Why Modular Monolith?
+
+Wolfix.Server chose this architecture for several reasons:
+
+### Advantages
+
+<CardGroup cols={2}>
+  <Card title="Simple Deployment" icon="rocket">
+    Single deployment unit - no container orchestration needed
+  </Card>
+  
+  <Card title="Clear Boundaries" icon="border-all">
+    Modules enforce separation of concerns
+  </Card>
+  
+  <Card title="Easy Communication" icon="exchange-alt">
+    In-memory event bus - no network calls
+  </Card>
+  
+  <Card title="Shared Resources" icon="database">
+    Single database connection pool, shared infrastructure
+  </Card>
+  
+  <Card title="Simpler Testing" icon="vial">
+    Test entire application locally
+  </Card>
+  
+  <Card title="Future-Proof" icon="road">
+    Can extract modules to microservices if needed
+  </Card>
+</CardGroup>
+
+### When to Use
+
+Modular monolith is ideal when:
+
+- Team size is small to medium (< 50 developers)
+- You need clear boundaries but not distributed deployment
+- You want to avoid microservices operational complexity
+- You're building an MVP or early-stage product
+- You may need to scale specific modules later
+
+## Modules in Wolfix.Server
+
+Wolfix.Server is organized into 8 independent modules:
+
+```
+Wolfix.Server/
+├── Admin.*/           # Admin management
+├── Catalog.*/         # Product catalog
+├── Customer.*/        # Customer profiles
+├── Identity.*/        # Authentication & authorization
+├── Media.*/           # File storage
+├── Order.*/           # Order processing
+├── Seller.*/          # Seller management
+├── Support.*/         # Customer support
+├── Shared.*/          # Shared components
+├── Wolfix.API/        # Entry point
+└── Wolfix.AppHost/    # Aspire orchestration
+```
+
+Each module follows the same structure:
+
+```
+{Module}.Domain/          # Business logic & entities
+{Module}.Application/     # Use cases & services
+{Module}.Infrastructure/  # Database & external services
+{Module}.Endpoints/       # HTTP API endpoints
+{Module}.IntegrationEvents/ # Event contracts
+{Module}.Tests/           # Tests
+```
+
+## Module Independence
+
+Modules maintain independence through strict rules:
+
+### 1. No Direct Dependencies
+
+Modules **never** reference each other directly:
+
+```csharp
+// ❌ BAD: Direct dependency
+using Customer.Domain;
+
+public class OrderService
+{
+    private readonly CustomerRepository _customerRepo; // Direct coupling!
+}
+```
+
+```csharp
+// ✅ GOOD: Event-based communication
+using Shared.IntegrationEvents;
+
+public class OrderService
+{
+    private readonly EventBus _eventBus;
+    
+    public async Task CreateOrder()
+    {
+        // Request data via event
+        var event = new GetCustomerDetails { CustomerId = id };
+        var result = await _eventBus.PublishWithSingleResultAsync<GetCustomerDetails, CustomerDto>(event, ct);
+    }
+}
+```
+
+### 2. Integration Events Only
+
+All inter-module communication goes through the `EventBus`:
+
+```csharp Shared.IntegrationEvents/EventBus.cs
+public class EventBus
+{
+    // Publish event and get a single result
+    public async Task<Result<TResult>> PublishWithSingleResultAsync<TEvent, TResult>(
+        TEvent @event, 
+        CancellationToken ct)
+    {
+        var handlers = _serviceProvider.GetServices<IIntegrationEventHandler<TEvent, TResult>>();
+        var handler = handlers.FirstOrDefault();
+        
+        if (handler == null)
+            return Result<TResult>.Failure("No handler found");
+        
+        return await handler.HandleAsync(@event, ct);
+    }
+    
+    // Publish event and get multiple results
+    public async Task<IEnumerable<TResult>> PublishWithMultipleResultsAsync<TEvent, TResult>(
+        TEvent @event, 
+        CancellationToken ct)
+    {
+        var handlers = _serviceProvider.GetServices<IIntegrationEventHandler<TEvent, TResult>>();
+        var tasks = handlers.Select(h => h.HandleAsync(@event, ct));
+        var results = await Task.WhenAll(tasks);
+        return results.Where(r => r.IsSuccess).Select(r => r.Value!);
+    }
+}
+```
+
+### 3. Separate Databases (Logical)
+
+Each module has its own `DbContext`:
+
+```csharp Catalog.Infrastructure/CatalogDbContext.cs
+public class CatalogDbContext : DbContext
+{
+    public DbSet<Product> Products { get; set; }
+    public DbSet<Category> Categories { get; set; }
+    
+    // Module-specific configuration
+}
+```
+
+```csharp Order.Infrastructure/OrderDbContext.cs
+public class OrderDbContext : DbContext
+{
+    public DbSet<Order> Orders { get; set; }
+    public DbSet<Delivery> Deliveries { get; set; }
+    
+    // Module-specific configuration
+}
+```
+
+They can share the same physical database, but maintain logical separation:
+
+```sql
+-- Catalog tables
+catalog_products
+catalog_categories
+catalog_reviews
+
+-- Order tables
+order_orders
+order_deliveries
+order_items
+```
+
+## Real-World Example: User Registration
+
+Let's trace a user registration flow across modules:
+
+<Steps>
+  <Step title="Identity Module: Create Account">
+    User submits registration form to Identity module:
+    
+    ```csharp Identity.Application/Services/AuthService.cs
+    public async Task<Result<string>> RegisterAsync(RegisterAsCustomerDto dto, CancellationToken ct)
+    {
+        // 1. Create account in Identity module
+        Result<Guid> registerResult = await authStore.RegisterAccountAsync(
+            dto.Email,
+            dto.Password,
+            Roles.Customer,
+            ct
+        );
+
+        if (registerResult.IsFailure)
+        {
+            return Result<string>.Failure(registerResult);
+        }
+        
+        Guid accountId = registerResult.Value;
+
+        // 2. Publish event to Customer module
+        var @event = new CustomerAccountCreated
+        {
+            AccountId = accountId
+        };
+        
+        Result<Guid> createCustomerResult = await eventBus
+            .PublishWithSingleResultAsync<CustomerAccountCreated, Guid>(@event, ct);
+
+        if (createCustomerResult.IsFailure)
+        {
+            return Result<string>.Failure(createCustomerResult);
+        }
+        
+        Guid customerId = createCustomerResult.Value;
+
+        // 3. Generate JWT token
+        string token = jwtService.GenerateToken(
+            accountId,
+            customerId,
+            dto.Email,
+            Roles.Customer
+        );
+        
+        return Result<string>.Success(token);
+    }
+    ```
+  </Step>
+
+  <Step title="Customer Module: Create Profile">
+    Customer module handles the event:
+    
+    ```csharp Customer.Application/EventHandlers/CustomerAccountCreatedHandler.cs
+    public class CustomerAccountCreatedHandler 
+        : IIntegrationEventHandler<CustomerAccountCreated, Guid>
+    {
+        private readonly ICustomerService _customerService;
+        
+        public async Task<Result<Guid>> HandleAsync(
+            CustomerAccountCreated @event, 
+            CancellationToken ct)
+        {
+            // Create customer profile
+            var result = await _customerService.CreateCustomerAsync(
+                @event.AccountId, 
+                ct
+            );
+            
+            return result;
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Result Returns Through Event Bus">
+    The Customer ID flows back through the event bus to the Identity module, which uses it to generate the JWT token.
+  </Step>
+</Steps>
+
+## Module Registration
+
+Modules self-register their dependencies:
+
+```csharp Catalog.Endpoints/Extensions/ServiceCollectionExtensions.cs
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddCatalogModule(
+        this IServiceCollection services,
+        string connectionString,
+        string toxicApiBaseUrl)
+    {
+        // Register domain services
+        services.AddScoped<ICategoryRepository, CategoryRepository>();
+        services.AddScoped<IProductRepository, ProductRepository>();
+        
+        // Register application services
+        services.AddScoped<CategoryService>();
+        services.AddScoped<ProductService>();
+        
+        // Register infrastructure
+        services.AddDbContext<CatalogDbContext>(options =>
+            options.UseNpgsql(connectionString));
+        
+        // Register HTTP clients
+        services.AddHttpClient<IToxicityService, ToxicityService>(client =>
+            client.BaseAddress = new Uri(toxicApiBaseUrl));
+        
+        // Register event handlers
+        services.AddScoped<IIntegrationEventHandler<ProductCreated, bool>, 
+            ProductCreatedHandler>();
+        
+        return services;
+    }
+}
+```
+
+The API host calls all module registrations:
+
+```csharp Wolfix.API/Extensions/WebApplicationBuilderExtension.cs
+public static async Task<WebApplicationBuilder> AddAllModules(
+    this WebApplicationBuilder builder)
+{
+    string connectionString = builder.Configuration.GetOrThrow("DB");
+
+    builder
+        .AddCatalogModule(connectionString)
+        .AddIdentityModule(connectionString)
+        .AddCustomerModule(connectionString)
+        .AddMediaModule(connectionString)
+        .AddSellerModule(connectionString)
+        .AddOrderModule(connectionString)
+        .AddAdminModule(connectionString);
+
+    await builder.AddSupportModule();
+    
+    return builder;
+}
+```
+
+## Benefits in Practice
+
+### Development Velocity
+
+- Developers work on individual modules without conflicts
+- Clear boundaries make code easier to understand
+- Changes stay localized to one module
+
+### Testing
+
+- Unit test domain logic in isolation
+- Integration test entire flows locally
+- No need for complex test environments
+
+### Deployment
+
+- Single deployment artifact
+- No service discovery needed
+- Simple rollback process
+- Lower infrastructure costs
+
+### Future Migration
+
+If a module needs to scale independently:
+
+1. Extract module to separate project
+2. Replace in-memory `EventBus` with message queue (RabbitMQ, Azure Service Bus)
+3. Deploy as separate service
+4. Update event handlers to use message queue
+
+<Warning>
+  Only extract modules to microservices when you have a clear performance or scaling need. Premature distribution adds complexity.
+</Warning>
+
+## Best Practices
+
+<Steps>
+  <Step title="Enforce Module Boundaries">
+    Use architecture tests to prevent direct dependencies:
+    
+    ```csharp
+    [Fact]
+    public void Modules_Should_Not_Reference_Other_Modules()
+    {
+        var catalogAssembly = typeof(CatalogModule).Assembly;
+        var forbiddenReferences = new[] { "Order", "Customer", "Seller" };
+        
+        var references = catalogAssembly.GetReferencedAssemblies()
+            .Select(a => a.Name);
+        
+        Assert.DoesNotContain(references, r => 
+            forbiddenReferences.Any(f => r.Contains(f)));
+    }
+    ```
+  </Step>
+
+  <Step title="Keep Events Focused">
+    Events should represent business facts, not commands:
+    
+    ```csharp
+    // ✅ GOOD: Business fact
+    public class OrderPlaced
+    {
+        public Guid OrderId { get; init; }
+        public Guid CustomerId { get; init; }
+        public decimal TotalAmount { get; init; }
+    }
+    
+    // ❌ BAD: Command disguised as event
+    public class CreateInvoiceForOrder { }
+    ```
+  </Step>
+
+  <Step title="Handle Event Failures">
+    Always handle event publishing failures:
+    
+    ```csharp
+    var result = await eventBus.PublishWithSingleResultAsync<TEvent, TResult>(@event, ct);
+    
+    if (result.IsFailure)
+    {
+        // Log error, compensate, or return failure to user
+        return Result<T>.Failure(result);
+    }
+    ```
+  </Step>
+
+  <Step title="Version Integration Events">
+    Add version numbers to events for evolution:
+    
+    ```csharp
+    public class CustomerCreatedV2
+    {
+        public int Version => 2;
+        public Guid CustomerId { get; init; }
+        public string Email { get; init; }
+        public DateTime CreatedAt { get; init; } // New field
+    }
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Clean Architecture" icon="layer-group" href="/concepts/clean-architecture">
+    Learn about the layered structure within each module
+  </Card>
+  
+  <Card title="Development Guide" icon="code" href="/guides/development">
+    Start building your own module
+  </Card>
+</CardGroup>

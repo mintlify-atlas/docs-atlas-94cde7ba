@@ -1,0 +1,424 @@
+---
+title: 'Support Tickets'
+description: 'Create and manage customer support requests'
+---
+
+## Create Support Request (Customer)
+
+<api method="POST" path="/api/support-requests" auth="Customer" />
+
+Creates a new support ticket for customer assistance.
+
+### Request Body
+
+<ParamField body="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+<ParamField body="category" type="string" required>
+  Support request category (e.g., "Order", "Product", "Account", "Technical")
+</ParamField>
+
+<ParamField body="subject" type="string" required>
+  Brief subject/title of the issue
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Detailed description of the issue or question
+</ParamField>
+
+<ParamField body="orderId" type="string (uuid)">
+  Related order ID (if applicable)
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Support request created successfully
+- `400 Bad Request` - Invalid request data
+- `404 Not Found` - Customer not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/support-requests" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "customer-uuid",
+    "category": "Order",
+    "subject": "Order not received",
+    "description": "I ordered product #12345 two weeks ago but have not received it yet. The tracking shows it was delivered but I never received the package.",
+    "orderId": "order-uuid"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/support-requests', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${jwtToken}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    customerId: customerId,
+    category: 'Order',
+    subject: 'Order not received',
+    description: 'Detailed description of the issue...',
+    orderId: orderId
+  })
+});
+
+if (response.status === 204) {
+  console.log('Support request submitted successfully');
+}
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/support-requests',
+    headers={'Authorization': f'Bearer {jwt_token}'},
+    json={
+        'customerId': customer_id,
+        'category': 'Order',
+        'subject': 'Order not received',
+        'description': 'Detailed description of the issue...',
+        'orderId': order_id
+    }
+)
+
+if response.status_code == 204:
+    print('Support request submitted successfully')
+```
+
+</CodeGroup>
+
+---
+
+## Get Customer Support Requests (Customer)
+
+<api method="GET" path="/api/support-requests/{customerId}" auth="Customer" />
+
+Retrieves all support requests for a customer.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier (must match authenticated user)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="category" type="string">
+  Filter by category (optional)
+</ParamField>
+
+### Response
+
+<ResponseField name="supportRequests" type="array">
+  Array of support request objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Support requests retrieved
+- `400 Bad Request` - Invalid category filter
+- `404 Not Found` - Customer not found
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+# Get all support requests
+curl -X GET "https://your-server.com/api/support-requests/customer-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+# Filter by category
+curl -X GET "https://your-server.com/api/support-requests/customer-uuid?category=Order" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  `https://your-server.com/api/support-requests/${customerId}?category=Order`,
+  {
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`
+    }
+  }
+);
+
+const supportRequests = await response.json();
+console.log(`Found ${supportRequests.length} support requests`);
+```
+
+</CodeGroup>
+
+### Success Response
+
+```json
+[
+  {
+    "id": "support-request-uuid-1",
+    "category": "Order",
+    "subject": "Order not received",
+    "description": "Detailed description...",
+    "status": "Pending",
+    "orderId": "order-uuid",
+    "createdAt": "2024-01-15T10:30:00Z",
+    "updatedAt": "2024-01-15T10:30:00Z"
+  },
+  {
+    "id": "support-request-uuid-2",
+    "category": "Product",
+    "subject": "Product quality issue",
+    "description": "The product arrived damaged...",
+    "status": "Resolved",
+    "response": "We apologize for the inconvenience. A replacement has been shipped.",
+    "respondedAt": "2024-01-10T14:20:00Z",
+    "createdAt": "2024-01-09T16:45:00Z",
+    "updatedAt": "2024-01-10T14:20:00Z"
+  }
+]
+```
+
+---
+
+## Get Support Request Details (Customer)
+
+<api method="GET" path="/api/support-requests/{customerId}/{supportRequestId}" auth="Customer" />
+
+Retrieves detailed information about a specific support request.
+
+### Path Parameters
+
+<ParamField path="customerId" type="string (uuid)" required>
+  Customer identifier
+</ParamField>
+
+<ParamField path="supportRequestId" type="string (uuid)" required>
+  Support request identifier
+</ParamField>
+
+### Response Codes
+
+- `200 OK` - Support request details retrieved
+- `400 Bad Request` - Invalid request
+- `404 Not Found` - Support request not found
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/support-requests/customer-uuid/request-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### Success Response
+
+```json
+{
+  "id": "support-request-uuid",
+  "customerId": "customer-uuid",
+  "customerName": "John Doe",
+  "customerEmail": "customer@example.com",
+  "category": "Order",
+  "subject": "Order not received",
+  "description": "I ordered product #12345 two weeks ago...",
+  "status": "Resolved",
+  "orderId": "order-uuid",
+  "response": "We've checked with the carrier and your package was delivered to your neighbor. Please check with them.",
+  "supportAgentId": "support-uuid",
+  "supportAgentName": "Jane Support",
+  "createdAt": "2024-01-15T10:30:00Z",
+  "respondedAt": "2024-01-15T15:45:00Z",
+  "updatedAt": "2024-01-15T15:45:00Z"
+}
+```
+
+---
+
+## Get All Pending Requests (Support)
+
+<api method="GET" path="/api/support-requests" auth="Support" />
+
+Retrieves all pending support requests for support staff to review.
+
+### Query Parameters
+
+<ParamField query="category" type="string">
+  Filter by category (optional)
+</ParamField>
+
+### Response
+
+<ResponseField name="supportRequests" type="array">
+  Array of pending support request objects
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Pending requests retrieved
+- `400 Bad Request` - Invalid category
+
+### Example
+
+```bash cURL
+curl -X GET "https://your-server.com/api/support-requests?category=Order" \
+  -H "Authorization: Bearer YOUR_SUPPORT_JWT_TOKEN"
+```
+
+---
+
+## Respond to Support Request (Support)
+
+<api method="PATCH" path="/api/support-requests/{supportRequestId}/supports/{supportId}/respond" auth="Support" />
+
+Provides a response to a customer support request.
+
+### Path Parameters
+
+<ParamField path="supportRequestId" type="string (uuid)" required>
+  Support request identifier
+</ParamField>
+
+<ParamField path="supportId" type="string (uuid)" required>
+  Support agent identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="response" type="string" required>
+  Response message to customer
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Response submitted successfully
+- `404 Not Found` - Support request or support agent not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/support-requests/request-uuid/supports/support-uuid/respond" \
+  -H "Authorization: Bearer YOUR_SUPPORT_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "response": "Thank you for contacting us. We have investigated your issue and found that your package was delivered to your building's front desk. Please check with your building management."
+  }'
+```
+
+---
+
+## Cancel Support Request (Support)
+
+<api method="PATCH" path="/api/support-requests/{supportRequestId}/supports/{supportId}/cancel" auth="Support" />
+
+Cancels a support request (marks it as cancelled/closed without resolution).
+
+### Path Parameters
+
+<ParamField path="supportRequestId" type="string (uuid)" required>
+  Support request identifier
+</ParamField>
+
+<ParamField path="supportId" type="string (uuid)" required>
+  Support agent identifier
+</ParamField>
+
+### Response Codes
+
+- `204 No Content` - Request cancelled
+- `404 Not Found` - Support request or support agent not found
+
+### Example
+
+```bash cURL
+curl -X PATCH "https://your-server.com/api/support-requests/request-uuid/supports/support-uuid/cancel" \
+  -H "Authorization: Bearer YOUR_SUPPORT_JWT_TOKEN"
+```
+
+---
+
+## Support Request Categories
+
+Common support request categories:
+
+- **Order** - Order status, delivery, tracking issues
+- **Product** - Product quality, defects, returns
+- **Account** - Account access, password, profile issues
+- **Technical** - Website bugs, technical problems
+- **Payment** - Payment issues, refunds, billing
+- **General** - General inquiries and questions
+
+---
+
+## Support Request Status
+
+Support requests can have the following statuses:
+
+- **Pending** - Awaiting support staff review
+- **In Progress** - Being actively handled by support
+- **Resolved** - Issue resolved and response sent to customer
+- **Cancelled** - Request cancelled without resolution
+
+---
+
+## Support Flow
+
+<Steps>
+  <Step title="Customer Creates Request">
+    Customer submits support request with details
+  </Step>
+  <Step title="Request Appears in Queue">
+    Request appears in support staff queue as "Pending"
+  </Step>
+  <Step title="Support Reviews">
+    Support staff reviews request and investigates issue
+  </Step>
+  <Step title="Support Responds">
+    Support staff provides response to customer
+  </Step>
+  <Step title="Request Resolved">
+    Request marked as "Resolved" and customer notified
+  </Step>
+</Steps>
+
+---
+
+## Customer Support Best Practices
+
+### For Customers
+
+<Info>
+  **Be Specific**: Provide detailed information about your issue including order numbers, product names, and error messages
+</Info>
+
+<Info>
+  **Choose Right Category**: Select the appropriate category to route your request to the right team
+</Info>
+
+<Info>
+  **Include Order Info**: If related to an order, always include the order ID
+</Info>
+
+### For Support Staff
+
+<Info>
+  **Respond Promptly**: Aim to respond within 24 hours
+</Info>
+
+<Info>
+  **Be Professional**: Maintain professional and courteous tone
+</Info>
+
+<Info>
+  **Provide Solutions**: Offer clear solutions or next steps
+</Info>
+
+<Info>
+  **Follow Up**: Check if customer is satisfied with the resolution
+</Info>

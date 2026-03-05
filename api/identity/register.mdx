@@ -1,0 +1,130 @@
+---
+title: 'Register'
+description: 'Create a new customer account'
+---
+
+## Register Customer
+
+<api method="POST" path="/api/account/customer/register" auth="none" />
+
+Creates a new customer account with email and password.
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  User's email address. Must be unique and valid format.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  User's password. Should meet security requirements (minimum length, complexity).
+</ParamField>
+
+### Response
+
+<ResponseField name="token" type="string">
+  JWT authentication token for the newly created customer account
+</ResponseField>
+
+### Response Codes
+
+- `200 OK` - Registration successful, returns JWT token
+- `400 Bad Request` - Invalid email format or password requirements not met
+- `409 Conflict` - Email already registered
+- `500 Internal Server Error` - Server error during registration
+
+### Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST "https://your-server.com/api/account/customer/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "customer@example.com",
+    "password": "SecurePass123!"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-server.com/api/account/customer/register', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    email: 'customer@example.com',
+    password: 'SecurePass123!'
+  })
+});
+
+const token = await response.json();
+console.log('JWT Token:', token);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://your-server.com/api/account/customer/register',
+    json={
+        'email': 'customer@example.com',
+        'password': 'SecurePass123!'
+    }
+)
+
+token = response.json()
+print(f'JWT Token: {token}')
+```
+
+```csharp C#
+using System.Net.Http.Json;
+
+var client = new HttpClient();
+var request = new { Email = "customer@example.com", Password = "SecurePass123!" };
+
+var response = await client.PostAsJsonAsync(
+    "https://your-server.com/api/account/customer/register",
+    request
+);
+
+var token = await response.Content.ReadAsStringAsync();
+Console.WriteLine($"JWT Token: {token}");
+```
+
+</CodeGroup>
+
+### Success Response Example
+
+```json
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+```
+
+### Error Response Examples
+
+**Email Already Registered (409 Conflict):**
+```json
+"Email already registered"
+```
+
+**Invalid Email Format (400 Bad Request):**
+```json
+"Invalid email format"
+```
+
+**Weak Password (400 Bad Request):**
+```json
+"Password must be at least 8 characters and contain uppercase, lowercase, and numbers"
+```
+
+## Next Steps
+
+After registration:
+
+1. Store the JWT token securely
+2. Use the token to authenticate API requests
+3. Complete customer profile information
+4. Start browsing products
+
+<Info>
+  The registration endpoint automatically creates a Customer role. To become a seller, use the [Seller Application](/api/seller/onboarding) endpoint.
+</Info>
